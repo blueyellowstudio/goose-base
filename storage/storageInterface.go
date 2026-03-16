@@ -4,6 +4,24 @@ import (
 	"time"
 )
 
+// StorageConfig holds configuration for local filesystem storage.
+type StorageConfig struct {
+	BaseDir        string
+	SecretKey      string
+	BaseURL        string
+	UploadExpiry   time.Duration
+	DownloadExpiry time.Duration
+}
+
+// SupabaseStorageConfig holds configuration for Supabase Storage.
+type SupabaseStorageConfig struct {
+	StorageURL       string
+	StoragePublicURL string
+	ServiceKey       string
+	UploadExpiry     time.Duration
+	DownloadExpiry   time.Duration
+}
+
 // Storage defines the interface for file storage operations
 type Storage interface {
 	GenerateUploadURL(bucket, objectKey string) (*UploadInfo, error)

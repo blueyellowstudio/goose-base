@@ -191,32 +191,3 @@ func (r *Repository) MoveToDeadLetter(ctx context.Context, tx pgx.Tx, event Outb
 	return nil
 }
 
-// MoveToDeadLetterTx moves a failed event to the dead letter table within a transaction.
-func (r *Repository) MoveToDeadLetterTx(ctx context.Context, tx pgx.Tx, event OutboxEvent, errMsg string) error {
-	const insertQuery = `
-		INSERT INTO outbox_dead_letter_events 
-			(id, original_event_id, event_type, payload, occurred_at, failed_at, retry_count, last_error)
-		VALUES ($1, $2, $3, $4, $5, now(), $6, $7)
-	`
-	_, err := tx.Exec(ctx, insertQuery,
-		uuid.New(),
-		event.ID,
-		event.EventType,
-		event.Payload,
-		event.OccurredAt,
-		event.RetryCount,
-		errMsg,
-	)
-	if err != nil {
-		return err
-	}
-
-	const updateQuery = `
-		UPDATE outbox_events
-		SET processed_at = now(),
-		    last_error = $2
-		WHERE id = $1
-	`
-	_, err = tx.Exec(ctx, updateQuery, event.ID, errMsg)
-	return err
-}

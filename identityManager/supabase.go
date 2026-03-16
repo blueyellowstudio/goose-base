@@ -7,10 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"time"
-
-	"eurodima/internal/domain/identityManager"
 
 	"github.com/google/uuid"
 )
@@ -19,661 +16,347 @@ type SupabaseIdentityManager struct {
 	supabaseURL        string
 	supabaseServiceKey string
 	supabaseAnonKey    string
+	client             *http.Client
 }
 
-func NewSupabaseIdentityManager() *SupabaseIdentityManager {
+// NewSupabaseIdentityManager creates an IdentityManager backed by Supabase Auth.
+// url is your Supabase project URL, serviceKey is the service_role key, anonKey is the anon/public key.
+func NewSupabaseIdentityManager(url, serviceKey, anonKey string) *SupabaseIdentityManager {
 	return &SupabaseIdentityManager{
-		supabaseURL:        os.Getenv("SUPABASE_URL"),
-		supabaseServiceKey: os.Getenv("SUPABASE_SERVICE_KEY"),
-		supabaseAnonKey:    os.Getenv("SUPABASE_ANON_KEY"),
+		supabaseURL:        url,
+		supabaseServiceKey: serviceKey,
+		supabaseAnonKey:    anonKey,
+		client:             &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
-func (s *SupabaseIdentityManager) CreateManagedUser(email, displayName string, companyUUID uuid.UUID, username *string) (*identityManager.AdminUserResponse, error) {
-	if s.supabaseURL == "" || s.supabaseServiceKey == "" {
-		return nil, fmt.Errorf("supabase configuration missing (SUPABASE_URL or SUPABASE_SERVICE_KEY)")
+// Compile-time check that SupabaseIdentityManager implements IdentityManager.
+var _ IdentityManager = (*SupabaseIdentityManager)(nil)
+
+func (s *SupabaseIdentityManager) newRequest(ctx context.Context, method, url string, payload interface{}) (*http.Request, error) {
+	var body io.Reader
+	if payload != nil {
+		b, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal request body: %w", err)
+		}
+		body = bytes.NewBuffer(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return req, nil
+}
+
+func (s *SupabaseIdentityManager) doServiceRequest(ctx context.Context, method, url string, payload interface{}) ([]byte, int, error) {
+	req, err := s.newRequest(ctx, method, url, payload)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("apikey", s.supabaseServiceKey)
+	req.Header.Set("Authorization", "Bearer "+s.supabaseServiceKey)
+	return s.do(req)
+}
+
+func (s *SupabaseIdentityManager) doAnonRequest(ctx context.Context, method, url string, payload interface{}) ([]byte, int, error) {
+	req, err := s.newRequest(ctx, method, url, payload)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("apikey", s.supabaseAnonKey)
+	return s.do(req)
+}
+
+func (s *SupabaseIdentityManager) do(req *http.Request) ([]byte, int, error) {
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("failed to read response body: %w", err)
+	}
+	return body, resp.StatusCode, nil
+}
+
+// parseAdminError extracts a human-readable error from a Supabase admin error response body.
+func parseAdminError(body []byte, status int, context string) error {
+	var errResp AdminErrorResponse
+	if json.Unmarshal(body, &errResp) == nil && errResp.Message != "" {
+		return fmt.Errorf("%s: %s", context, errResp.Message)
+	}
+	return fmt.Errorf("%s: status %d: %s", context, status, string(body))
+}
+
+// parseAnonError extracts a human-readable error from a Supabase anon error response body.
+func parseAnonError(body []byte, status int, context string) error {
+	var errResp struct {
+		Error            string `json:"error"`
+		ErrorDescription string `json:"error_description"`
+		Message          string `json:"message"`
+	}
+	if json.Unmarshal(body, &errResp) == nil {
+		if errResp.ErrorDescription != "" {
+			return fmt.Errorf("%s: %s", context, errResp.ErrorDescription)
+		}
+		if errResp.Message != "" {
+			return fmt.Errorf("%s: %s", context, errResp.Message)
+		}
+	}
+	return fmt.Errorf("%s: status %d: %s", context, status, string(body))
+}
+
+func (s *SupabaseIdentityManager) Register(ctx context.Context, name, email, password string) (*RegisterResponse, error) {
+	body, status, err := s.doAnonRequest(ctx, http.MethodPost,
+		s.supabaseURL+"/auth/v1/signup",
+		map[string]interface{}{
+			"email":    email,
+			"password": password,
+			"data":     map[string]string{"display_name": name},
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("supabase signup: %w", err)
+	}
+	if status != http.StatusOK {
+		return nil, parseAnonError(body, status, "supabase signup")
 	}
 
-	adminURL := fmt.Sprintf("%s/auth/v1/admin/users", s.supabaseURL)
+	var resp struct {
+		Identities []struct {
+			UserID string `json:"user_id"`
+		} `json:"identities"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("supabase signup: failed to parse response: %w", err)
+	}
+	if len(resp.Identities) == 0 {
+		return nil, fmt.Errorf("supabase signup: no identity returned")
+	}
+	return &RegisterResponse{UserID: resp.Identities[0].UserID}, nil
+}
 
-	userMetadata := map[string]interface{}{
+func (s *SupabaseIdentityManager) Authenticate(ctx context.Context, email, password string) (*AuthResponse, error) {
+	body, status, err := s.doAnonRequest(ctx, http.MethodPost,
+		s.supabaseURL+"/auth/v1/token?grant_type=password",
+		map[string]string{"email": email, "password": password},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("supabase authenticate: %w", err)
+	}
+	if status != http.StatusOK {
+		return nil, parseAnonError(body, status, "supabase authenticate")
+	}
+	var resp AuthResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("supabase authenticate: failed to parse response: %w", err)
+	}
+	return &resp, nil
+}
+
+func (s *SupabaseIdentityManager) RefreshToken(ctx context.Context, refreshToken string) (*AuthResponse, error) {
+	body, status, err := s.doAnonRequest(ctx, http.MethodPost,
+		s.supabaseURL+"/auth/v1/token?grant_type=refresh_token",
+		map[string]string{"refresh_token": refreshToken},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("supabase refresh token: %w", err)
+	}
+	if status != http.StatusOK {
+		return nil, parseAnonError(body, status, "supabase refresh token")
+	}
+	var resp AuthResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("supabase refresh token: failed to parse response: %w", err)
+	}
+	return &resp, nil
+}
+
+func (s *SupabaseIdentityManager) VerifyEmailOtp(ctx context.Context, email, token string, otpType EmailOtpType) (*AuthResponse, error) {
+	body, status, err := s.doAnonRequest(ctx, http.MethodPost,
+		s.supabaseURL+"/auth/v1/verify",
+		map[string]string{"email": email, "token": token, "type": string(otpType)},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("supabase verify email otp: %w", err)
+	}
+	if status != http.StatusOK {
+		return nil, parseAnonError(body, status, "supabase verify email otp")
+	}
+	var resp AuthResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("supabase verify email otp: failed to parse response: %w", err)
+	}
+	return &resp, nil
+}
+
+func (s *SupabaseIdentityManager) VerifyTokenHash(ctx context.Context, tokenHash, linkType string) (*AuthResponse, error) {
+	body, status, err := s.doAnonRequest(ctx, http.MethodPost,
+		s.supabaseURL+"/auth/v1/verify",
+		map[string]string{"token_hash": tokenHash, "type": linkType},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("supabase verify token hash: %w", err)
+	}
+	if status != http.StatusOK {
+		return nil, parseAdminError(body, status, "supabase verify token hash")
+	}
+	var resp AuthResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("supabase verify token hash: failed to parse response: %w", err)
+	}
+	return &resp, nil
+}
+
+func (s *SupabaseIdentityManager) SendMagicLink(ctx context.Context, email string) error {
+	body, status, err := s.doServiceRequest(ctx, http.MethodPost,
+		s.supabaseURL+"/auth/v1/magiclink",
+		map[string]string{"email": email},
+	)
+	if err != nil {
+		return fmt.Errorf("supabase magic link: %w", err)
+	}
+	if status != http.StatusOK {
+		return parseAdminError(body, status, "supabase magic link")
+	}
+	return nil
+}
+
+func (s *SupabaseIdentityManager) SendPasswordResetEmail(ctx context.Context, email string) error {
+	body, status, err := s.doAnonRequest(ctx, http.MethodPost,
+		s.supabaseURL+"/auth/v1/recover",
+		map[string]string{"email": email},
+	)
+	if err != nil {
+		return fmt.Errorf("supabase password reset: %w", err)
+	}
+	if status != http.StatusOK {
+		return parseAnonError(body, status, "supabase password reset")
+	}
+	return nil
+}
+
+func (s *SupabaseIdentityManager) ResendVerificationEmail(ctx context.Context, email string) error {
+	body, status, err := s.doAnonRequest(ctx, http.MethodPost,
+		s.supabaseURL+"/auth/v1/resend",
+		map[string]string{"type": "signup", "email": email},
+	)
+	if err != nil {
+		return fmt.Errorf("supabase resend verification: %w", err)
+	}
+	if status != http.StatusOK {
+		return parseAdminError(body, status, "supabase resend verification")
+	}
+	return nil
+}
+
+func (s *SupabaseIdentityManager) SendInvite(ctx context.Context, email string, metadata map[string]interface{}) (uuid.UUID, error) {
+	body, status, err := s.doServiceRequest(ctx, http.MethodPost,
+		s.supabaseURL+"/auth/v1/invite",
+		InviteUserRequest{Email: email, Data: metadata},
+	)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("supabase invite: %w", err)
+	}
+	if status != http.StatusOK && status != http.StatusCreated {
+		return uuid.Nil, parseAdminError(body, status, "supabase invite")
+	}
+	var resp AdminUserResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return uuid.Nil, fmt.Errorf("supabase invite: failed to parse response: %w", err)
+	}
+	userID, err := uuid.Parse(resp.ID)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("supabase invite: failed to parse user ID: %w", err)
+	}
+	return userID, nil
+}
+
+func (s *SupabaseIdentityManager) CreateManagedUser(ctx context.Context, email, displayName string, companyUUID uuid.UUID, username *string) (*AdminUserResponse, error) {
+	metadata := map[string]interface{}{
 		"display_name": displayName,
 		"company_uuid": companyUUID.String(),
 	}
 	if username != nil && *username != "" {
-		userMetadata["username"] = *username
+		metadata["username"] = *username
 	}
 
-	payload := identityManager.CreateUserRequest{
-		Email:        email,
-		EmailConfirm: true,
-		UserMetadata: userMetadata,
-	}
-
-	body, _ := json.Marshal(payload)
-
-	req, err := http.NewRequest(http.MethodPost, adminURL, bytes.NewBuffer(body))
+	body, status, err := s.doServiceRequest(ctx, http.MethodPost,
+		s.supabaseURL+"/auth/v1/admin/users",
+		CreateUserRequest{Email: email, EmailConfirm: true, UserMetadata: metadata},
+	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("supabase create managed user: %w", err)
 	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("apikey", s.supabaseServiceKey)
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.supabaseServiceKey))
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call supabase admin API: %w", err)
+	if status != http.StatusOK && status != http.StatusCreated {
+		return nil, parseAdminError(body, status, "supabase create managed user")
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+	var resp AdminUserResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("supabase create managed user: failed to parse response: %w", err)
 	}
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		var errResp identityManager.AdminErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Message != "" {
-			return nil, fmt.Errorf("supabase admin error: %s", errResp.Message)
-		}
-		return nil, fmt.Errorf("supabase admin returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var userResp identityManager.AdminUserResponse
-	if err := json.Unmarshal(respBody, &userResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return &userResp, nil
-}
-
-type supabaseRegisterResponse struct {
-	ID         string `json:"id"`
-	Identities []struct {
-		UserID string `json:"user_id"`
-	} `json:"identities"`
-}
-
-type supabaseErrorResponse struct {
-	Error            string `json:"error"`
-	ErrorDescription string `json:"error_description"`
-}
-
-func (s *SupabaseIdentityManager) Register(name, email, password string) (*identityManager.RegisterResponse, error) {
-	if s.supabaseURL == "" || s.supabaseAnonKey == "" {
-		return nil, fmt.Errorf("supabase configuration missing")
-	}
-
-	authURL := fmt.Sprintf("%s/auth/v1/signup", s.supabaseURL)
-
-	payload := map[string]interface{}{
-		"email":    email,
-		"password": password,
-		"data": map[string]string{
-			"display_name": name,
-		},
-	}
-	body, _ := json.Marshal(payload)
-
-	req, err := http.NewRequest(http.MethodPost, authURL, bytes.NewBuffer(body))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("apikey", s.supabaseAnonKey)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call supabase: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		var errResp supabaseErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			return nil, fmt.Errorf("%s", errResp.ErrorDescription)
-		}
-		return nil, fmt.Errorf("supabase returned status %d", resp.StatusCode)
-	}
-
-	var authResp supabaseRegisterResponse
-	if err := json.Unmarshal(respBody, &authResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	if len(authResp.Identities) == 0 {
-		return nil, fmt.Errorf("no identity returned from supabase")
-	}
-
-	return &identityManager.RegisterResponse{
-		UserID: authResp.Identities[0].UserID,
-	}, nil
-}
-
-func (s *SupabaseIdentityManager) RefreshToken(refreshToken string) (*identityManager.AuthResponse, error) {
-	if s.supabaseURL == "" || s.supabaseAnonKey == "" {
-		return nil, fmt.Errorf("supabase configuration missing")
-	}
-
-	authURL := fmt.Sprintf("%s/auth/v1/token?grant_type=refresh_token", s.supabaseURL)
-
-	payload := map[string]string{
-		"refresh_token": refreshToken,
-	}
-	body, _ := json.Marshal(payload)
-
-	req, err := http.NewRequest(http.MethodPost, authURL, bytes.NewBuffer(body))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("apikey", s.supabaseAnonKey)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call supabase: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		var errResp supabaseErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			return nil, fmt.Errorf("supabase error: %s", errResp.ErrorDescription)
-		}
-		return nil, fmt.Errorf("supabase returned status %d", resp.StatusCode)
-	}
-
-	var authResp identityManager.AuthResponse
-	if err := json.Unmarshal(respBody, &authResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return &authResp, nil
-}
-
-func (s *SupabaseIdentityManager) Authenticate(email, password string) (*identityManager.AuthResponse, error) {
-	if s.supabaseURL == "" || s.supabaseAnonKey == "" {
-		return nil, fmt.Errorf("supabase configuration missing")
-	}
-
-	authURL := fmt.Sprintf("%s/auth/v1/token?grant_type=password", s.supabaseURL)
-
-	payload := map[string]string{
-		"email":    email,
-		"password": password,
-	}
-	body, _ := json.Marshal(payload)
-
-	req, err := http.NewRequest(http.MethodPost, authURL, bytes.NewBuffer(body))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("apikey", s.supabaseAnonKey)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call supabase: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		var errResp supabaseErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			return nil, fmt.Errorf("supabase error: %s", errResp.ErrorDescription)
-		}
-		return nil, fmt.Errorf("supabase returned status %d", resp.StatusCode)
-	}
-
-	var authResp identityManager.AuthResponse
-	if err := json.Unmarshal(respBody, &authResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return &authResp, nil
-}
-
-func (s *SupabaseIdentityManager) VerifyEmailOtp(email, token string, otpType identityManager.EmailOtpType) (*identityManager.AuthResponse, error) {
-	if s.supabaseURL == "" || s.supabaseAnonKey == "" {
-		return nil, fmt.Errorf("supabase configuration missing")
-	}
-
-	authURL := fmt.Sprintf("%s/auth/v1/verify", s.supabaseURL)
-
-	payload := map[string]string{
-		"email": email,
-		"token": token,
-		"type":  string(otpType),
-	}
-	body, _ := json.Marshal(payload)
-
-	req, err := http.NewRequest(http.MethodPost, authURL, bytes.NewBuffer(body))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("apikey", s.supabaseAnonKey)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call supabase: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		var errResp supabaseErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil {
-			return nil, fmt.Errorf("%s", errResp.ErrorDescription)
-		}
-		return nil, fmt.Errorf("supabase returned status %d", resp.StatusCode)
-	}
-
-	var authResp identityManager.AuthResponse
-	if err := json.Unmarshal(respBody, &authResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return &authResp, nil
-}
-
-func (s *SupabaseIdentityManager) SendMagicLink(email string) error {
-	if s.supabaseURL == "" || s.supabaseServiceKey == "" {
-		return fmt.Errorf("supabase configuration missing")
-	}
-
-	magicLinkURL := fmt.Sprintf("%s/auth/v1/magiclink", s.supabaseURL)
-
-	payload := map[string]string{
-		"email": email,
-	}
-	body, _ := json.Marshal(payload)
-
-	req, err := http.NewRequest(http.MethodPost, magicLinkURL, bytes.NewBuffer(body))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("apikey", s.supabaseServiceKey)
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.supabaseServiceKey))
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to call supabase magic link API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("supabase magic link returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	return nil
-}
-
-func (s *SupabaseIdentityManager) SendInvite(email string, metadata map[string]interface{}) (uuid.UUID, error) {
-	if s.supabaseURL == "" || s.supabaseServiceKey == "" {
-		return uuid.Nil, fmt.Errorf("supabase configuration missing (SUPABASE_URL or SUPABASE_SERVICE_KEY)")
-	}
-
-	inviteURL := fmt.Sprintf("%s/auth/v1/invite", s.supabaseURL)
-
-	payload := identityManager.InviteUserRequest{
-		Email: email,
-		Data:  metadata,
-	}
-	body, _ := json.Marshal(payload)
-
-	req, err := http.NewRequest(http.MethodPost, inviteURL, bytes.NewBuffer(body))
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("apikey", s.supabaseServiceKey)
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.supabaseServiceKey))
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("failed to call supabase invite API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		var errResp identityManager.AdminErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Message != "" {
-			return uuid.Nil, fmt.Errorf("supabase invite error: %s", errResp.Message)
-		}
-		return uuid.Nil, fmt.Errorf("supabase invite returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var userResp identityManager.AdminUserResponse
-	if err := json.Unmarshal(respBody, &userResp); err != nil {
-		return uuid.Nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-	userId, err := uuid.Parse(userResp.ID)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("failed to parse user ID: %w", err)
-	}
-
-	return userId, nil
-}
-
-func (s *SupabaseIdentityManager) VerifyTokenHash(tokenHash string, linkType string) (*identityManager.AuthResponse, error) {
-	if s.supabaseURL == "" || s.supabaseAnonKey == "" {
-		return nil, fmt.Errorf("supabase configuration missing")
-	}
-
-	verifyURL := fmt.Sprintf("%s/auth/v1/verify", s.supabaseURL)
-
-	payload := map[string]string{
-		"token_hash": tokenHash,
-		"type":       linkType,
-	}
-	body, _ := json.Marshal(payload)
-
-	req, err := http.NewRequest(http.MethodPost, verifyURL, bytes.NewBuffer(body))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("apikey", s.supabaseAnonKey)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call supabase verify API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		var errResp identityManager.AdminErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Message != "" {
-			return nil, fmt.Errorf("supabase verify error: %s", errResp.Message)
-		}
-		return nil, fmt.Errorf("supabase verify returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var tokenResp identityManager.VerifyTokenHashResponse
-	if err := json.Unmarshal(respBody, &tokenResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return &identityManager.AuthResponse{
-		AccessToken:  tokenResp.AccessToken,
-		RefreshToken: tokenResp.RefreshToken,
-	}, nil
-}
-
-func (s *SupabaseIdentityManager) SendPasswordResetEmail(email string) error {
-	if s.supabaseURL == "" || s.supabaseAnonKey == "" {
-		return fmt.Errorf("supabase configuration missing")
-	}
-
-	resetURL := fmt.Sprintf("%s/auth/v1/recover", s.supabaseURL)
-
-	payload := map[string]string{
-		"email": email,
-	}
-	body, _ := json.Marshal(payload)
-
-	req, err := http.NewRequest(http.MethodPost, resetURL, bytes.NewBuffer(body))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("apikey", s.supabaseAnonKey)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to call supabase recover API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("supabase recover returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	return nil
-}
-
-func (s *SupabaseIdentityManager) DeleteUser(userID uuid.UUID) error {
-	if s.supabaseURL == "" || s.supabaseServiceKey == "" {
-		return fmt.Errorf("supabase configuration missing (SUPABASE_URL or SUPABASE_SERVICE_KEY)")
-	}
-
-	adminURL := fmt.Sprintf("%s/auth/v1/admin/users/%s", s.supabaseURL, userID.String())
-
-	req, err := http.NewRequest(http.MethodDelete, adminURL, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("apikey", s.supabaseServiceKey)
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.supabaseServiceKey))
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to call supabase admin API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		respBody, _ := io.ReadAll(resp.Body)
-		var errResp identityManager.AdminErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Message != "" {
-			return fmt.Errorf("supabase admin error: %s", errResp.Message)
-		}
-		return fmt.Errorf("supabase admin returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	return nil
-}
-
-func (s *SupabaseIdentityManager) DisableUser(userID uuid.UUID) error {
-	if s.supabaseURL == "" || s.supabaseServiceKey == "" {
-		return fmt.Errorf("supabase configuration missing (SUPABASE_URL or SUPABASE_SERVICE_KEY)")
-	}
-
-	adminURL := fmt.Sprintf("%s/auth/v1/admin/users/%s", s.supabaseURL, userID.String())
-
-	payload := map[string]interface{}{
-		"ban_duration": "876600h", // ~100 years
-	}
-	body, _ := json.Marshal(payload)
-
-	req, err := http.NewRequest(http.MethodPut, adminURL, bytes.NewBuffer(body))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("apikey", s.supabaseServiceKey)
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.supabaseServiceKey))
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to call supabase admin API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		var errResp identityManager.AdminErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Message != "" {
-			return fmt.Errorf("supabase admin error: %s", errResp.Message)
-		}
-		return fmt.Errorf("supabase admin returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	return nil
-}
-
-func (s *SupabaseIdentityManager) UpdateUserPassword(userID uuid.UUID, password string) error {
-	if s.supabaseURL == "" || s.supabaseServiceKey == "" {
-		return fmt.Errorf("supabase configuration missing (SUPABASE_URL or SUPABASE_SERVICE_KEY)")
-	}
-
-	adminURL := fmt.Sprintf("%s/auth/v1/admin/users/%s", s.supabaseURL, userID.String())
-
-	payload := map[string]string{
-		"password": password,
-	}
-	body, _ := json.Marshal(payload)
-
-	req, err := http.NewRequest(http.MethodPut, adminURL, bytes.NewBuffer(body))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("apikey", s.supabaseServiceKey)
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.supabaseServiceKey))
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to call supabase admin API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		var errResp identityManager.AdminErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Message != "" {
-			return fmt.Errorf("supabase admin error: %s", errResp.Message)
-		}
-		return fmt.Errorf("supabase admin returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	return nil
+	return &resp, nil
 }
 
 func (s *SupabaseIdentityManager) GetUserEmail(ctx context.Context, userID uuid.UUID) (string, error) {
-	if s.supabaseURL == "" || s.supabaseServiceKey == "" {
-		return "", fmt.Errorf("supabase configuration missing (SUPABASE_URL or SUPABASE_SERVICE_KEY)")
-	}
-
-	adminURL := fmt.Sprintf("%s/auth/v1/admin/users/%s", s.supabaseURL, userID.String())
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, adminURL, nil)
+	body, status, err := s.doServiceRequest(ctx, http.MethodGet,
+		fmt.Sprintf("%s/auth/v1/admin/users/%s", s.supabaseURL, userID),
+		nil,
+	)
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return "", fmt.Errorf("supabase get user email: %w", err)
 	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("apikey", s.supabaseServiceKey)
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.supabaseServiceKey))
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to call supabase admin API: %w", err)
+	if status != http.StatusOK {
+		return "", parseAdminError(body, status, "supabase get user email")
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
+	var resp AdminUserResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("supabase get user email: failed to parse response: %w", err)
 	}
-
-	if resp.StatusCode != http.StatusOK {
-		var errResp identityManager.AdminErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Message != "" {
-			return "", fmt.Errorf("supabase admin error: %s", errResp.Message)
-		}
-		return "", fmt.Errorf("supabase admin returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var userResp identityManager.AdminUserResponse
-	if err := json.Unmarshal(respBody, &userResp); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return userResp.Email, nil
+	return resp.Email, nil
 }
 
-func (s *SupabaseIdentityManager) ResendVerificationEmail(email string) error {
-	if s.supabaseURL == "" || s.supabaseAnonKey == "" {
-		return fmt.Errorf("supabase configuration missing")
-	}
-
-	resendURL := fmt.Sprintf("%s/auth/v1/resend", s.supabaseURL)
-
-	payload := map[string]string{
-		"type":  "signup",
-		"email": email,
-	}
-	body, _ := json.Marshal(payload)
-
-	req, err := http.NewRequest(http.MethodPost, resendURL, bytes.NewBuffer(body))
+func (s *SupabaseIdentityManager) UpdateUserPassword(ctx context.Context, userID uuid.UUID, password string) error {
+	body, status, err := s.doServiceRequest(ctx, http.MethodPut,
+		fmt.Sprintf("%s/auth/v1/admin/users/%s", s.supabaseURL, userID),
+		map[string]string{"password": password},
+	)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return fmt.Errorf("supabase update password: %w", err)
 	}
+	if status != http.StatusOK {
+		return parseAdminError(body, status, "supabase update password")
+	}
+	return nil
+}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("apikey", s.supabaseAnonKey)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+func (s *SupabaseIdentityManager) DisableUser(ctx context.Context, userID uuid.UUID) error {
+	body, status, err := s.doServiceRequest(ctx, http.MethodPut,
+		fmt.Sprintf("%s/auth/v1/admin/users/%s", s.supabaseURL, userID),
+		map[string]interface{}{"ban_duration": "876600h"}, // ~100 years
+	)
 	if err != nil {
-		return fmt.Errorf("failed to call supabase resend API: %w", err)
+		return fmt.Errorf("supabase disable user: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		var errResp identityManager.AdminErrorResponse
-		if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Message != "" {
-			return fmt.Errorf("supabase resend error: %s", errResp.Message)
-		}
-		return fmt.Errorf("supabase resend returned status %d: %s", resp.StatusCode, string(respBody))
+	if status != http.StatusOK {
+		return parseAdminError(body, status, "supabase disable user")
 	}
+	return nil
+}
 
+func (s *SupabaseIdentityManager) DeleteUser(ctx context.Context, userID uuid.UUID) error {
+	body, status, err := s.doServiceRequest(ctx, http.MethodDelete,
+		fmt.Sprintf("%s/auth/v1/admin/users/%s", s.supabaseURL, userID),
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("supabase delete user: %w", err)
+	}
+	if status != http.StatusOK && status != http.StatusNoContent {
+		return parseAdminError(body, status, "supabase delete user")
+	}
 	return nil
 }

@@ -3,7 +3,6 @@ package outbox
 import (
 	"context"
 	"encoding/json"
-	"eurodima/internal/domain/events"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -22,7 +21,7 @@ func NewWriter() *Writer {
 // Add inserts a domain event into the outbox table within the given transaction.
 // This method requires a transaction to enforce transactional safety.
 // The event will be processed asynchronously by the outbox worker.
-func (w *Writer) Add(ctx context.Context, tx pgx.Tx, event events.DomainEvent) error {
+func (w *Writer) Add(ctx context.Context, tx pgx.Tx, event DomainEvent) error {
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return err

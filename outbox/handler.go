@@ -2,7 +2,6 @@ package outbox
 
 import (
 	"context"
-	"eurodima/internal/domain/events"
 )
 
 // Handler processes domain events from the outbox.
@@ -13,5 +12,5 @@ type Handler interface {
 
 	// Handle processes the domain event.
 	// Implementations must be idempotent to handle at-least-once delivery.
-	Handle(ctx context.Context, event events.DomainEvent) error
+	Handle(ctx context.Context, event DomainEvent) error
 }

@@ -17,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"eurodima/internal/config"
 )
 
 // FileStorage implements the Storage interface using local filesystem
@@ -25,11 +24,11 @@ type FileStorage struct {
 	baseDir   string
 	secretKey string
 	baseURL   string
-	config    *config.StorageConfig
+	config    *StorageConfig
 }
 
 // NewFileStorage creates a new FileStorage instance
-func NewFileStorage(cfg *config.StorageConfig) (*FileStorage, error) {
+func NewFileStorage(cfg *StorageConfig) (*FileStorage, error) {
 	// Ensure base directory exists
 	if err := os.MkdirAll(cfg.BaseDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create base directory: %w", err)
@@ -237,14 +236,11 @@ func (s *FileStorage) ValidateSignature(r *http.Request, expectedMethod string) 
 
 // safePath validates and returns a safe filesystem path
 func (s *FileStorage) safePath(key string) (string, error) {
-	if strings.Contains(key, "..") {
-		return "", errors.New("invalid path")
-	}
-
 	clean := filepath.Clean("/" + key)
 	full := filepath.Join(s.baseDir, clean)
 
-	if !strings.HasPrefix(full, filepath.Clean(s.baseDir)) {
+	if !strings.HasPrefix(full, filepath.Clean(s.baseDir)+string(filepath.Separator)) &&
+		full != filepath.Clean(s.baseDir) {
 		return "", errors.New("path traversal detected")
 	}
 

@@ -3,7 +3,6 @@ package storage
 import (
 	"bytes"
 	"encoding/json"
-	"eurodima/internal/config"
 	"fmt"
 	"io"
 	"log/slog"
@@ -25,7 +24,7 @@ type SupabaseStorage struct {
 }
 
 // NewSupabaseStorage creates a new SupabaseStorage instance
-func NewSupabaseStorage(cfg *config.SupabaseStorageConfig) (*SupabaseStorage, error) {
+func NewSupabaseStorage(cfg *SupabaseStorageConfig) (*SupabaseStorage, error) {
 	if cfg.StorageURL == "" {
 		return nil, fmt.Errorf("storage URL is required")
 	}
