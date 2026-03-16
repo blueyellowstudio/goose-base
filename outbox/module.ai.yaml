@@ -1,0 +1,95 @@
+spec_version: "1.0"
+entity_type: "module"
+module_name: outbox
+intent: >
+  Implements the transactional outbox pattern to ensure reliable, atomic event
+  publishing alongside domain operations. Events are persisted in the same
+  database transaction as domain changes, then processed asynchronously by a
+  background worker.
+responsibilities:
+  - Write domain events to the outbox table within a database transaction
+  - Poll and fetch unprocessed events with row-level locking for concurrent access
+  - Deserialize event payloads into concrete domain event types
+  - Route events to registered handlers for processing
+  - Track retry counts and move failed events to dead letter after max retries
+  - Mark events as processed upon successful handler execution
+non_responsibilities:
+  - Does NOT define domain events (consumes events.DomainEvent interface)
+  - Does NOT implement event handlers (consumers provide Handler implementations)
+  - Does NOT guarantee exactly-once delivery (handlers must be idempotent)
+  - Does NOT handle authentication or authorization
+  - Does NOT manage database schema or migrations
+public_api:
+  functions:
+    - "NewWriter() *Writer"
+    - "(*Writer).Add(ctx context.Context, tx pgx.Tx, event events.DomainEvent) error"
+    - "NewRepository(pool *pgxpool.Pool) *Repository"
+    - "(*Repository).FetchBatch(ctx context.Context, limit int) ([]OutboxEvent, error)"
+    - "(*Repository).FetchBatchTx(ctx context.Context, tx pgx.Tx, limit int) ([]OutboxEvent, error)"
+    - "(*Repository).MarkProcessed(ctx context.Context, id uuid.UUID) error"
+    - "(*Repository).MarkProcessedTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) error"
+    - "(*Repository).MarkFailed(ctx context.Context, id uuid.UUID, errMsg string) error"
+    - "(*Repository).MarkFailedTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, errMsg string) error"
+    - "(*Repository).MoveToDeadLetter(ctx context.Context, tx pgx.Tx, event OutboxEvent, errMsg string) error"
+    - "(*Repository).MoveToDeadLetterTx(ctx context.Context, tx pgx.Tx, event OutboxEvent, errMsg string) error"
+    - "NewEventRegistry() *EventRegistry"
+    - "(*EventRegistry).Register(eventType string, factory func() events.DomainEvent)"
+    - "(*EventRegistry).Deserialize(eventType string, payload []byte) (events.DomainEvent, error)"
+    - "(*EventRegistry).IsRegistered(eventType string) bool"
+    - "NewWorker(pool *pgxpool.Pool, repo *Repository, registry *EventRegistry, handlers []Handler, config WorkerConfig, logger *slog.Logger) *Worker"
+    - "(*Worker).Run(ctx context.Context) error"
+    - "DefaultWorkerConfig() WorkerConfig"
+  types:
+    - "Writer"
+    - "Repository"
+    - "EventRegistry"
+    - "Worker"
+    - "WorkerConfig"
+    - "OutboxEvent"
+    - "Handler (interface)"
+  events: []
+state_model:
+  stateful: true
+  state_description: >
+    Worker maintains in-memory state (handlers, config, registry) during its
+    lifetime. Persistent state is stored in the outbox_events and
+    outbox_dead_letter_events database tables with fields: id, event_type,
+    payload, occurred_at, processed_at, retry_count, last_error, created_at.
+  persistence: database
+invariants:
+  - Events written via Writer.Add are always persisted within the caller's transaction
+  - FetchBatch uses FOR UPDATE SKIP LOCKED ensuring no event is processed by multiple workers simultaneously
+  - Events exceeding MaxRetries are moved to dead letter table and marked processed
+  - RetryCount is incremented on each failed processing attempt
+  - ProcessedAt is set only when event is successfully processed or moved to dead letter
+failure_modes:
+  - "ErrUnknownEventType: returned when deserializing an unregistered event type"
+  - "JSON unmarshal error: returned when event payload cannot be deserialized"
+  - "Database connection errors: propagated from pgx pool operations"
+  - "Handler errors: caught and trigger retry/dead-letter logic"
+  - "Context cancellation: graceful shutdown of worker loop"
+side_effects:
+  - Writes to outbox_events table (via Writer.Add)
+  - Updates outbox_events table (processed_at, retry_count, last_error)
+  - Inserts into outbox_dead_letter_events table (failed events)
+  - Logging via slog (info, debug, warn, error levels)
+dependencies:
+  internal:
+    - "eurodima/internal/domain/events"
+  external:
+    - "github.com/jackc/pgx/v5"
+    - "github.com/jackc/pgx/v5/pgxpool"
+    - "github.com/google/uuid"
+    - "log/slog"
+    - "encoding/json"
+concurrency_model: multi-threaded
+extension_rules: >
+  To add new event types: register them in NewEventRegistry() with a factory
+  function. To add new handlers: implement the Handler interface and pass to
+  NewWorker(). The module is designed for future replacement of polling with
+  message brokers (Kafka/RabbitMQ) without changing domain events or handlers.
+complexity_profile:
+  time: "O(n) per batch where n is batch size"
+  space: "O(n) for in-memory event batch"
+  cognitive: low
+stability_level: stable
