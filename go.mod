@@ -1,4 +1,4 @@
-module github.com/blueyellowstudio/service-basics
+module github.com/blueyellowstudio/goose-base
 
 go 1.24.0
 
