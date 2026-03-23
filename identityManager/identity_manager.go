@@ -10,11 +10,11 @@ import (
 type EmailOtpType string
 
 const (
-	EmailOtpTypeSignup       EmailOtpType = "signup"
-	EmailOtpTypeRecovery     EmailOtpType = "recovery"
-	EmailOtpTypeMagicLink    EmailOtpType = "magiclink"
-	EmailOtpTypeInvite       EmailOtpType = "invite"
-	EmailOtpTypeEmailChange  EmailOtpType = "email_change"
+	EmailOtpTypeSignup      EmailOtpType = "signup"
+	EmailOtpTypeRecovery    EmailOtpType = "recovery"
+	EmailOtpTypeMagicLink   EmailOtpType = "magiclink"
+	EmailOtpTypeInvite      EmailOtpType = "invite"
+	EmailOtpTypeEmailChange EmailOtpType = "email_change"
 )
 
 type CreateUserRequest struct {
@@ -32,6 +32,7 @@ type RegisterResponse struct {
 	UserID string
 }
 
+// AuthResponse
 type AuthResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
