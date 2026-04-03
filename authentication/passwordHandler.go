@@ -45,7 +45,7 @@ func (a *Authentication) ResetPasswordHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	identity, err := a.authorization.TokenHandler.GetIdentityFromContext(r.Context())
+	identity, err := a.tokenHandler.GetIdentityFromContext(r.Context())
 	if err != nil {
 		a.respondWithError(w, http.StatusUnauthorized, "User not authenticated")
 		return
@@ -88,7 +88,7 @@ func (a *Authentication) ChangePasswordHandler(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	identity, err := a.authorization.TokenHandler.GetIdentityFromContext(r.Context())
+	identity, err := a.tokenHandler.GetIdentityFromContext(r.Context())
 	if err != nil {
 		a.respondWithError(w, http.StatusUnauthorized, "User not authenticated")
 		return

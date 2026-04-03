@@ -9,7 +9,7 @@ import (
 
 type Authentication struct {
 	identities             identityManager.IdentityManager
-	authorization          authorization.Authorization
+	tokenHandler           authorization.TokenHandler
 	appUrl                 string
 	tokenCookieName        string
 	refreshTokenCookieName string
@@ -17,13 +17,13 @@ type Authentication struct {
 }
 
 func NewAuthentication(identityManager identityManager.IdentityManager,
-	authorization authorization.Authorization,
+	tokenHandler authorization.TokenHandler,
 	appUrl, tokenCookieName, refreshTokenCookieName string,
 	isProduction bool) *Authentication {
 
 	return &Authentication{
 		identities:             identityManager,
-		authorization:          authorization,
+		tokenHandler:           tokenHandler,
 		appUrl:                 appUrl,
 		tokenCookieName:        tokenCookieName,
 		refreshTokenCookieName: refreshTokenCookieName,

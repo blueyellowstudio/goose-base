@@ -151,7 +151,7 @@ func (a *Authentication) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Authentication) getRefreshTokenFromCookies(r *http.Request) *string {
-	cookie, err := r.Cookie(a.authorization.RefreshTokenCookieName)
+	cookie, err := r.Cookie(a.refreshTokenCookieName)
 	if err != nil {
 		return nil
 	}
@@ -160,7 +160,7 @@ func (a *Authentication) getRefreshTokenFromCookies(r *http.Request) *string {
 
 // DisableAccountHandler disables the user's account in the identity manager and clears authentication cookies
 func (a *Authentication) DisableAccountHandler(w http.ResponseWriter, r *http.Request) {
-	userClaims, err := a.authorization.TokenHandler.GetIdentityFromContext(r.Context())
+	userClaims, err := a.tokenHandler.GetIdentityFromContext(r.Context())
 	if err != nil {
 		a.respondWithError(w, http.StatusUnauthorized, "User not authenticated")
 		return
@@ -185,7 +185,7 @@ func (a *Authentication) DisableAccountHandler(w http.ResponseWriter, r *http.Re
 
 // DeleteAccountHandler deletes the user's account from the identity manager and clears authentication cookies, this can also be used in combination of a handler that deletes internal user data, not only from the identity manager
 func (a *Authentication) DeleteAccountHandler(w http.ResponseWriter, r *http.Request) {
-	userClaims, err := a.authorization.TokenHandler.GetIdentityFromContext(r.Context())
+	userClaims, err := a.tokenHandler.GetIdentityFromContext(r.Context())
 	if err != nil {
 		a.respondWithError(w, http.StatusUnauthorized, "User not authenticated")
 		return

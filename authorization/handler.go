@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 func (a *Authorization) Handler(next http.Handler) http.Handler {
@@ -31,7 +32,12 @@ func (a *Authorization) getContextWithUser(r *http.Request) (context.Context, bo
 	if !a.isProduction {
 		user := r.Header.Get("AuthorizationOverwrite")
 		if user != "" {
-			ctx, err := a.TokenHandler.CreateDebugContext(ctx, user)
+			userID, err := uuid.Parse(user)
+			if err != nil {
+				slog.Error("Failed to parse user ID", "error", err)
+				return ctx, false
+			}
+			ctx, err = a.TokenHandler.CreateDebugContext(ctx, userID)
 			if err != nil {
 				slog.Error("Failed to create debug context", "error", err)
 				return ctx, false

@@ -139,7 +139,7 @@ func (m *mockAuthTokenHandler) CreateContext(ctx context.Context, claims jwt.Map
 	return ctx, nil
 }
 
-func (m *mockAuthTokenHandler) CreateDebugContext(ctx context.Context, userID string) (context.Context, error) {
+func (m *mockAuthTokenHandler) CreateDebugContext(ctx context.Context, userID uuid.UUID) (context.Context, error) {
 	return ctx, nil
 }
 
@@ -155,12 +155,7 @@ func (m *mockAuthTokenHandler) GetIdentityFromContext(ctx context.Context) (auth
 }
 
 func newTestAuthentication(idm identityManager.IdentityManager, tokenHandler authorization.TokenHandler, isProduction bool) *Authentication {
-	authz := authorization.Authorization{
-		TokenCookieName:        "token",
-		RefreshTokenCookieName: "refresh",
-		TokenHandler:           tokenHandler,
-	}
-	return NewAuthentication(idm, authz, "https://app.test", "token", "refresh", isProduction)
+	return NewAuthentication(idm, tokenHandler, "https://app.test", "token", "refresh", isProduction)
 }
 
 func TestSetAuthCookie_UsesLaxInDebugMode(t *testing.T) {

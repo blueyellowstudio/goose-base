@@ -12,9 +12,9 @@ import (
 )
 
 type mockTokenHandler struct {
-	createContext         func(ctx context.Context, claims jwt.MapClaims) (context.Context, error)
-	createDebugContext    func(ctx context.Context, userID string) (context.Context, error)
-	validateToken         func(claims jwt.MapClaims) error
+	createContext          func(ctx context.Context, claims jwt.MapClaims) (context.Context, error)
+	createDebugContext     func(ctx context.Context, userID uuid.UUID) (context.Context, error)
+	validateToken          func(claims jwt.MapClaims) error
 	getIdentityFromContext func(ctx context.Context) (ContextIdentity, error)
 }
 
@@ -25,7 +25,7 @@ func (m *mockTokenHandler) CreateContext(ctx context.Context, claims jwt.MapClai
 	return ctx, nil
 }
 
-func (m *mockTokenHandler) CreateDebugContext(ctx context.Context, userID string) (context.Context, error) {
+func (m *mockTokenHandler) CreateDebugContext(ctx context.Context, userID uuid.UUID) (context.Context, error) {
 	if m.createDebugContext != nil {
 		return m.createDebugContext(ctx, userID)
 	}
@@ -83,23 +83,25 @@ func TestGetContextWithUser_DebugOverrideInNonProduction(t *testing.T) {
 	type ctxKey string
 	const key ctxKey = "debug-user"
 
+	devUserID := uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
+
 	h := &mockTokenHandler{
-		createDebugContext: func(ctx context.Context, userID string) (context.Context, error) {
-			if userID != "dev-user" {
+		createDebugContext: func(ctx context.Context, userID uuid.UUID) (context.Context, error) {
+			if userID != devUserID {
 				return ctx, errors.New("unexpected user")
 			}
-			return context.WithValue(ctx, key, userID), nil
+			return context.WithValue(ctx, key, userID.String()), nil
 		},
 	}
 	a := Authorization{TokenHandler: h, isProduction: false}
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("AuthorizationOverwrite", "dev-user")
+	req.Header.Set("AuthorizationOverwrite", devUserID.String())
 
 	ctx, ok := a.getContextWithUser(req)
 	if !ok {
 		t.Fatal("expected debug override to authorize user")
 	}
-	if got, _ := ctx.Value(key).(string); got != "dev-user" {
+	if got, _ := ctx.Value(key).(string); got != devUserID.String() {
 		t.Fatalf("expected debug user in context, got %q", got)
 	}
 }
