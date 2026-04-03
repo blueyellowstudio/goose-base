@@ -24,8 +24,8 @@ type SupabaseStorageConfig struct {
 
 // Storage defines the interface for file storage operations
 type Storage interface {
-	GenerateUploadURL(bucket, objectKey string) (*UploadInfo, error)
-	GenerateDownloadURL(bucket, objectKey, filename string) (*DownloadInfo, error)
+	GenerateUploadURL(bucket, objectKey string, mimeType *string) (*UploadInfo, error)
+	GenerateDownloadURL(bucket, objectKey, filename string, download bool) (*DownloadInfo, error)
 	DeleteObject(bucket, objectKey string) error
 	ListObjects(bucket, prefix string) ([]string, error)
 	GetObjectInfo(bucket, objectKey string) (*ObjectInfo, error)

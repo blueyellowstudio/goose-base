@@ -56,11 +56,22 @@ func NewSupabaseStorage(cfg *SupabaseStorageConfig) (*SupabaseStorage, error) {
 }
 
 // GenerateUploadURL creates a signed URL for uploading a file to Supabase Storage
-func (s *SupabaseStorage) GenerateUploadURL(bucket, objectKey string) (*UploadInfo, error) {
+func (s *SupabaseStorage) GenerateUploadURL(bucket, objectKey string, mimeType *string) (*UploadInfo, error) {
 	// Supabase Storage API: POST /object/upload/sign/{bucket}/{path}
 	endpoint := fmt.Sprintf("%s/object/upload/sign/%s/%s", s.storageURL, bucket, objectKey)
 
-	req, err := http.NewRequest(http.MethodPost, endpoint, nil)
+	body := map[string]interface{}{
+		"upsert": "true",
+	}
+	if mimeType != nil {
+		body["contentType"] = *mimeType
+	}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request body: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -107,11 +118,8 @@ func (s *SupabaseStorage) GenerateUploadURL(bucket, objectKey string) (*UploadIn
 }
 
 // GenerateDownloadURL creates a signed URL for downloading a file from Supabase Storage
-func (s *SupabaseStorage) GenerateDownloadURL(bucket, objectKey, filename string) (*DownloadInfo, error) {
-	// First verify the object exists
-	if !s.FileExists(bucket, objectKey) {
-		return nil, fmt.Errorf("object not found: %s/%s", bucket, objectKey)
-	}
+func (s *SupabaseStorage) GenerateDownloadURL(bucket, objectKey, filename string, download bool) (*DownloadInfo, error) {
+	// Supabase verifies existence already, so no need to do this here.
 
 	// Supabase Storage API: POST /object/sign/{bucket}/{path}
 	endpoint := fmt.Sprintf("%s/object/sign/%s/%s", s.storageURL, bucket, objectKey)
@@ -120,6 +128,10 @@ func (s *SupabaseStorage) GenerateDownloadURL(bucket, objectKey, filename string
 	body := map[string]interface{}{
 		"expiresIn": expirySeconds,
 	}
+	if download {
+		body["download"] = filename
+	}
+
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)
@@ -151,14 +163,13 @@ func (s *SupabaseStorage) GenerateDownloadURL(bucket, objectKey, filename string
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	downloadURL := result.SignedURL
-	// Add download parameter if filename is specified
-	if filename != "" {
+	downloadURL := fmt.Sprintf("%s%s", s.storagePublicURL, result.SignedURL)
+	if filename != "" && download {
 		separator := "?"
 		if strings.Contains(downloadURL, "?") {
 			separator = "&"
 		}
-		downloadURL = fmt.Sprintf("%s%s%sdownload=%s", s.storagePublicURL, downloadURL, separator, url.QueryEscape(filename))
+		downloadURL = fmt.Sprintf("%s%sdownload=%s", downloadURL, separator, url.QueryEscape(filename))
 	}
 
 	slog.Info("Generated Supabase download URL",

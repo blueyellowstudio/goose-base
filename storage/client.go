@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
 )
 
 // FileStorage implements the Storage interface using local filesystem
@@ -51,7 +50,7 @@ func (s *FileStorage) signURL(method, key string, exp int64) string {
 }
 
 // GenerateUploadURL creates a signed URL for uploading a file
-func (s *FileStorage) GenerateUploadURL(bucket, objectKey string) (*UploadInfo, error) {
+func (s *FileStorage) GenerateUploadURL(bucket, objectKey string, fileType *string) (*UploadInfo, error) {
 	expiry := s.config.UploadExpiry
 	if expiry > 7*24*time.Hour {
 		expiry = 7 * 24 * time.Hour
@@ -83,7 +82,7 @@ func (s *FileStorage) GenerateUploadURL(bucket, objectKey string) (*UploadInfo, 
 }
 
 // GenerateDownloadURL creates a signed URL for downloading a file
-func (s *FileStorage) GenerateDownloadURL(bucket, objectKey, filename string) (*DownloadInfo, error) {
+func (s *FileStorage) GenerateDownloadURL(bucket, objectKey, filename string, download bool) (*DownloadInfo, error) {
 	// Verify object exists
 	fullPath, err := s.safePath(filepath.Join(bucket, objectKey))
 	if err != nil {
@@ -109,6 +108,9 @@ func (s *FileStorage) GenerateDownloadURL(bucket, objectKey, filename string) (*
 	params.Set("sig", sig)
 	if filename != "" {
 		params.Set("filename", sanitizeFilename(filename))
+	}
+	if download {
+		params.Set("download", "true")
 	}
 
 	downloadURL := fmt.Sprintf("%s/file/download?%s", s.baseURL, params.Encode())
@@ -236,11 +238,14 @@ func (s *FileStorage) ValidateSignature(r *http.Request, expectedMethod string) 
 
 // safePath validates and returns a safe filesystem path
 func (s *FileStorage) safePath(key string) (string, error) {
+	if strings.Contains(key, "..") {
+		return "", errors.New("invalid path")
+	}
+
 	clean := filepath.Clean("/" + key)
 	full := filepath.Join(s.baseDir, clean)
 
-	if !strings.HasPrefix(full, filepath.Clean(s.baseDir)+string(filepath.Separator)) &&
-		full != filepath.Clean(s.baseDir) {
+	if !strings.HasPrefix(full, filepath.Clean(s.baseDir)) {
 		return "", errors.New("path traversal detected")
 	}
 
@@ -296,10 +301,17 @@ func (s *FileStorage) DownloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	contentDisposition := "inline"
+	if download := r.URL.Query().Get("download"); download == "true" {
+		contentDisposition = "attachment"
+	}
+
 	// Set Content-Disposition if filename is provided
 	if filename := r.URL.Query().Get("filename"); filename != "" {
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", sanitizeFilename(filename)))
+		contentDisposition = fmt.Sprintf("%s; filename=\"%s\"", contentDisposition, sanitizeFilename(filename))
 	}
+
+	w.Header().Set("Content-Disposition", contentDisposition)
 
 	http.ServeFile(w, r, path)
 }
