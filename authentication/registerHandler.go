@@ -21,45 +21,48 @@ func (a *Authentication) RegisterUser(ctx context.Context, username, email, pass
 	return a.identities.Register(ctx, username, email, password)
 }
 
-func (a *Authentication) VerifyEmailHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		a.respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
+func (a *Authentication) GetVerifyTokenHandler(otpType identityManager.EmailOtpType) http.HandlerFunc {
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			a.respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed")
+			return
+		}
+
+		var req VerifyEmailRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			a.respondWithError(w, http.StatusBadRequest, "Invalid request body")
+			return
+		}
+
+		// Validate input
+		if req.Email == "" || req.Token == "" {
+			a.respondWithError(w, http.StatusBadRequest, "Email and token are required")
+			return
+		}
+
+		// Verify the OTP
+		authResponse, err := a.identities.VerifyEmailOtp(r.Context(), req.Email, req.Token, otpType)
+		if err != nil {
+			slog.Error("Supabase OTP verification failed", "error", err)
+			a.respondWithError(w, http.StatusUnauthorized, "Invalid or expired OTP")
+			return
+		}
+
+		// Set the auth cookie
+		a.setAuthCookie(w, &identityManager.AuthResponse{
+			AccessToken:  authResponse.AccessToken,
+			RefreshToken: authResponse.RefreshToken,
+		})
+
+		// Respond to the user
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(LoginResponse{
+			Success: true,
+			Message: "Email verified successfully",
+		})
 	}
-
-	var req VerifyEmailRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		a.respondWithError(w, http.StatusBadRequest, "Invalid request body")
-		return
-	}
-
-	// Validate input
-	if req.Email == "" || req.Token == "" {
-		a.respondWithError(w, http.StatusBadRequest, "Email and token are required")
-		return
-	}
-
-	// Verify the OTP
-	authResponse, err := a.identities.VerifyEmailOtp(r.Context(), req.Email, req.Token, identityManager.EmailOtpTypeSignup)
-	if err != nil {
-		slog.Error("Supabase OTP verification failed", "error", err)
-		a.respondWithError(w, http.StatusUnauthorized, "Invalid or expired OTP")
-		return
-	}
-
-	// Set the auth cookie
-	a.setAuthCookie(w, &identityManager.AuthResponse{
-		AccessToken:  authResponse.AccessToken,
-		RefreshToken: authResponse.RefreshToken,
-	})
-
-	// Respond to the user
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(LoginResponse{
-		Success: true,
-		Message: "Email verified successfully",
-	})
 }
 
 func (a *Authentication) ResendVerificationEmailHandler(w http.ResponseWriter, r *http.Request) {

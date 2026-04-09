@@ -155,7 +155,14 @@ func (m *mockAuthTokenHandler) GetIdentityFromContext(ctx context.Context) (auth
 }
 
 func newTestAuthentication(idm identityManager.IdentityManager, tokenHandler authorization.TokenHandler, isProduction bool) *Authentication {
-	return NewAuthentication(idm, tokenHandler, "https://app.test", "token", "refresh", isProduction)
+	loginRedirectConfig := LoginRedirectConfig{
+		RedirectToTokenLoginAfterMagicLinkFailed: false,
+		ToeknLoginPath:                           "/token-login",
+		LoginErrorPath:                           "/login-error",
+		AcceptInvitePath:                         "/accept-invite",
+		SetPasswordPath:                          "/set-password",
+	}
+	return NewAuthentication(idm, tokenHandler, "https://app.test", "token", "refresh", isProduction, loginRedirectConfig)
 }
 
 func TestSetAuthCookie_UsesLaxInDebugMode(t *testing.T) {
@@ -248,7 +255,7 @@ func TestVerifyEmailHandler_RequiresEmailAndToken(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/verify", bytes.NewBufferString(`{"email":""}`))
 	rr := httptest.NewRecorder()
 
-	a.VerifyEmailHandler(rr, req)
+	a.GetVerifyTokenHandler(identityManager.EmailOtpTypeSignup)(rr, req)
 
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rr.Code)

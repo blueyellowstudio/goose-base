@@ -30,16 +30,21 @@ func (a *Authentication) AuthLinkHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	redirectURL := a.getRedirectURLForLinkType(linkType)
 	tokenResp, err := a.identities.VerifyTokenHash(r.Context(), token, linkType)
 	if err != nil {
 		slog.Error("Failed to verify auth link token", "error", err, "type", linkType)
+
+		if a.LoginRedirectConfig.RedirectToTokenLoginAfterMagicLinkFailed {
+			a.redirectToMagicLogin(w, r, redirectURL)
+			return
+		}
+
 		a.redirectToError(w, r, "Invalid or expired link")
 		return
 	}
 
 	a.setAuthCookie(w, tokenResp)
-
-	redirectURL := a.getRedirectURLForLinkType(linkType)
 	http.Redirect(w, r, redirectURL, http.StatusFound)
 }
 
@@ -57,9 +62,9 @@ func (a *Authentication) getRedirectURLForLinkType(linkType string) string {
 
 	switch linkType {
 	case LinkTypeInvite:
-		return appURL + "/accept-invite"
+		return appURL + a.LoginRedirectConfig.AcceptInvitePath
 	case LinkTypeRecovery:
-		return appURL + "/set-password"
+		return appURL + a.LoginRedirectConfig.SetPasswordPath
 	case LinkTypeMagicLink, LinkTypeSignup:
 		return appURL + "/"
 	default:
@@ -69,7 +74,17 @@ func (a *Authentication) getRedirectURLForLinkType(linkType string) string {
 
 func (a *Authentication) redirectToError(w http.ResponseWriter, r *http.Request, message string) {
 	appURL := a.appUrl
+	errorPath := a.LoginRedirectConfig.LoginErrorPath
 
-	errorURL := fmt.Sprintf("%s/auth-error?message=%s", appURL, url.QueryEscape(message))
+	errorURL := fmt.Sprintf("%s%s?message=%s", appURL, errorPath, url.QueryEscape(message))
 	http.Redirect(w, r, errorURL, http.StatusFound)
+}
+
+func (a *Authentication) redirectToMagicLogin(w http.ResponseWriter, r *http.Request, redirecrUrl string) {
+	appURL := a.appUrl
+	link := appURL + a.LoginRedirectConfig.ToeknLoginPath
+	if redirecrUrl != "" {
+		link += "?redirect=" + url.QueryEscape(redirecrUrl)
+	}
+	http.Redirect(w, r, link, http.StatusFound)
 }

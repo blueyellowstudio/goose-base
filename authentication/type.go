@@ -7,6 +7,14 @@ import (
 	"github.com/blueyellowstudio/goose-base/identityManager"
 )
 
+type LoginRedirectConfig struct {
+	RedirectToTokenLoginAfterMagicLinkFailed bool
+	ToeknLoginPath                           string
+	LoginErrorPath                           string
+	AcceptInvitePath                         string
+	SetPasswordPath                          string
+}
+
 type Authentication struct {
 	identities             identityManager.IdentityManager
 	tokenHandler           authorization.TokenHandler
@@ -14,12 +22,14 @@ type Authentication struct {
 	tokenCookieName        string
 	refreshTokenCookieName string
 	isProduction           bool
+	LoginRedirectConfig    LoginRedirectConfig
 }
 
 func NewAuthentication(identityManager identityManager.IdentityManager,
 	tokenHandler authorization.TokenHandler,
 	appUrl, tokenCookieName, refreshTokenCookieName string,
-	isProduction bool) *Authentication {
+	isProduction bool,
+	loginRedirectConfig LoginRedirectConfig) *Authentication {
 
 	return &Authentication{
 		identities:             identityManager,
@@ -28,6 +38,7 @@ func NewAuthentication(identityManager identityManager.IdentityManager,
 		tokenCookieName:        tokenCookieName,
 		refreshTokenCookieName: refreshTokenCookieName,
 		isProduction:           isProduction,
+		LoginRedirectConfig:    loginRedirectConfig,
 	}
 }
 
