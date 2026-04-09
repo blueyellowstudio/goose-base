@@ -82,7 +82,7 @@ func (a *Authentication) redirectToError(w http.ResponseWriter, r *http.Request,
 
 func (a *Authentication) redirectToMagicLogin(w http.ResponseWriter, r *http.Request, redirecrUrl string) {
 	appURL := a.appUrl
-	link := appURL + a.LoginRedirectConfig.ToeknLoginPath
+	link := appURL + a.LoginRedirectConfig.TokenLoginPath
 	if redirecrUrl != "" {
 		link += "?redirect=" + url.QueryEscape(redirecrUrl)
 	}

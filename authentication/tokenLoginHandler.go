@@ -11,6 +11,11 @@ type StartLoginRequest struct {
 }
 
 func (a *Authentication) StartLoginHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		a.respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
 	var req StartLoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		a.respondWithError(w, http.StatusBadRequest, "Invalid request body")

@@ -157,7 +157,7 @@ func (m *mockAuthTokenHandler) GetIdentityFromContext(ctx context.Context) (auth
 func newTestAuthentication(idm identityManager.IdentityManager, tokenHandler authorization.TokenHandler, isProduction bool) *Authentication {
 	loginRedirectConfig := LoginRedirectConfig{
 		RedirectToTokenLoginAfterMagicLinkFailed: false,
-		ToeknLoginPath:                           "/token-login",
+		TokenLoginPath:                           "/token-login",
 		LoginErrorPath:                           "/login-error",
 		AcceptInvitePath:                         "/accept-invite",
 		SetPasswordPath:                          "/set-password",
@@ -273,7 +273,7 @@ func TestAuthLinkHandler_InvalidTypeRedirectsToError(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusFound, rr.Code)
 	}
 	location := rr.Header().Get("Location")
-	if !strings.Contains(location, "/auth-error?") {
+	if !strings.Contains(location, "/login-error?") {
 		t.Fatalf("expected redirect to auth-error, got %q", location)
 	}
 }

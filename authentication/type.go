@@ -9,7 +9,7 @@ import (
 
 type LoginRedirectConfig struct {
 	RedirectToTokenLoginAfterMagicLinkFailed bool
-	ToeknLoginPath                           string
+	TokenLoginPath                           string
 	LoginErrorPath                           string
 	AcceptInvitePath                         string
 	SetPasswordPath                          string
