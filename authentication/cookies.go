@@ -31,7 +31,7 @@ func (a *Authentication) setAuthCookie(w http.ResponseWriter, authToken *identit
 	refreshCookie := &http.Cookie{
 		Name:     a.refreshTokenCookieName,
 		Value:    authToken.RefreshToken,
-		Path:     "/",
+		Path:     a.refreshPath,
 		MaxAge:   CookieMaxAge,
 		HttpOnly: true,
 		Secure:   isProduction,
@@ -62,7 +62,7 @@ func (a *Authentication) clearAuthCookie(w http.ResponseWriter) {
 	refreshCookie := &http.Cookie{
 		Name:     a.refreshTokenCookieName,
 		Value:    "",
-		Path:     "/",
+		Path:     a.refreshPath,
 		MaxAge:   -1,
 		HttpOnly: true,
 		Secure:   isProduction,

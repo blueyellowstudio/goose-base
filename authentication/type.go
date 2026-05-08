@@ -23,6 +23,7 @@ type Authentication struct {
 	refreshTokenCookieName string
 	isProduction           bool
 	LoginRedirectConfig    LoginRedirectConfig
+	refreshPath            string
 }
 
 func NewAuthentication(identityManager identityManager.IdentityManager,
@@ -39,7 +40,12 @@ func NewAuthentication(identityManager identityManager.IdentityManager,
 		refreshTokenCookieName: refreshTokenCookieName,
 		isProduction:           isProduction,
 		LoginRedirectConfig:    loginRedirectConfig,
+		refreshPath:            "/",
 	}
+}
+
+func (a *Authentication) SetRefreshPath(path string) {
+	a.refreshPath = path
 }
 
 // respondWithError sends an error response
