@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -142,7 +143,7 @@ func (r *StoredFileRepository) GetByID(ctx context.Context, id uuid.UUID) (*doma
 
 	row := r.pool.QueryRow(ctx, query, id)
 	result, err := scanStoredFile(row)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -167,7 +168,7 @@ func (r *StoredFileRepository) GetByIDTx(ctx context.Context, tx txpkg.Transacti
 
 	row := pgxTx.QueryRow(ctx, query, id)
 	result, err := scanStoredFile(row)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -189,7 +190,7 @@ func (r *StoredFileRepository) GetLatestActive(ctx context.Context, fileObjID uu
 
 	row := r.pool.QueryRow(ctx, query, fileObjID)
 	result, err := scanStoredFile(row)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

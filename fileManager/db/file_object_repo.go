@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -107,7 +108,7 @@ func (r *FileObjectRepository) GetFileObjectWithFile(ctx context.Context, id uui
 
 	row := r.pool.QueryRow(ctx, query, id)
 	obj, file, err := scanFileObjectWithFile(row)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil, nil
 	}
 	if err != nil {
@@ -137,7 +138,7 @@ func (r *FileObjectRepository) GetFileObjectWithFileTx(ctx context.Context, tx t
 
 	row := pgxTx.QueryRow(ctx, query, id)
 	obj, file, err := scanFileObjectWithFile(row)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil, nil
 	}
 	if err != nil {
@@ -156,7 +157,7 @@ func (r *FileObjectRepository) GetByID(ctx context.Context, id uuid.UUID) (*doma
 
 	row := r.pool.QueryRow(ctx, query, id)
 	result, err := scanFileObject(row)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -176,7 +177,7 @@ func (r *FileObjectRepository) GetByFileAndLanguage(ctx context.Context, fileID 
 
 	row := r.pool.QueryRow(ctx, query, fileID, languageID)
 	result, err := scanFileObject(row)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -197,7 +198,7 @@ func (r *FileObjectRepository) GetDefaultByFile(ctx context.Context, fileID uuid
 
 	row := r.pool.QueryRow(ctx, query, fileID)
 	result, err := scanFileObject(row)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

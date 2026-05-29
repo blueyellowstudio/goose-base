@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -96,7 +97,7 @@ func (r *FolderRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.F
 
 	row := r.pool.QueryRow(ctx, query, id)
 	result, err := scanFolder(row)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -119,7 +120,7 @@ func (r *FolderRepository) GetByIDTx(ctx context.Context, tx txpkg.Transaction, 
 
 	row := pgxTx.QueryRow(ctx, query, id)
 	result, err := scanFolder(row)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -172,11 +173,13 @@ func (r *FolderRepository) Move(ctx context.Context, tx txpkg.Transaction, folde
 		return fmt.Errorf("move folder: lock source: %w", err)
 	}
 
+	parts := strings.Split(currentPath, ".")
+	ownLabel := parts[len(parts)-1]
+
 	var newBasePath string
 	if newParentID == nil {
 		// Moving to root: new path is just the folder's own label (last segment)
-		parts := strings.Split(currentPath, ".")
-		newBasePath = parts[len(parts)-1]
+		newBasePath = ownLabel
 	} else {
 		var parentPath string
 		parentPathQuery := fmt.Sprintf(`SELECT path::text FROM %s WHERE id = $1`, r.tables.Folders)
@@ -184,8 +187,7 @@ func (r *FolderRepository) Move(ctx context.Context, tx txpkg.Transaction, folde
 		if err != nil {
 			return fmt.Errorf("move folder: get parent path: %w", err)
 		}
-		parts := strings.Split(currentPath, ".")
-		newBasePath = parentPath + "." + parts[len(parts)-1]
+		newBasePath = parentPath + "." + ownLabel
 	}
 
 	// Update all descendants (path prefix replacement)

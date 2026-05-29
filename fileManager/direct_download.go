@@ -117,8 +117,8 @@ func buildDownloadFilename(file *domain.File, fileObj *domain.FileObject) string
 
 func getDownloadNameParts(file *domain.File, fileObj *domain.FileObject) (string, string) {
 	name := strings.TrimSpace(file.Name)
-	if strings.TrimSpace(fileObj.Name) != "" {
-		name = strings.TrimSpace(fileObj.Name)
+	if trimmed := strings.TrimSpace(fileObj.Name); trimmed != "" {
+		name = trimmed
 	}
 
 	extension := getFileExtension(file.FileType)
@@ -133,6 +133,26 @@ func getDownloadNameParts(file *domain.File, fileObj *domain.FileObject) (string
 	return name, extension
 }
 
+// canonicalExtensions overrides mime.ExtensionsByType which returns alphabetically sorted results
+// (e.g. ".jfif" before ".jpg" for image/jpeg).
+var canonicalExtensions = map[string]string{
+	"image/jpeg":       ".jpg",
+	"image/png":        ".png",
+	"image/gif":        ".gif",
+	"image/webp":       ".webp",
+	"image/svg+xml":    ".svg",
+	"application/pdf":  ".pdf",
+	"text/plain":       ".txt",
+	"text/html":        ".html",
+	"text/csv":         ".csv",
+	"video/mp4":        ".mp4",
+	"video/quicktime":  ".mov",
+	"audio/mpeg":       ".mp3",
+	"audio/wav":        ".wav",
+	"application/zip":  ".zip",
+	"application/json": ".json",
+}
+
 func getFileExtension(fileType *string) string {
 	if fileType == nil {
 		return ""
@@ -145,6 +165,10 @@ func getFileExtension(fileType *string) string {
 
 	if parsedMediaType, _, parseErr := mime.ParseMediaType(mediaType); parseErr == nil {
 		mediaType = parsedMediaType
+	}
+
+	if ext, ok := canonicalExtensions[mediaType]; ok {
+		return ext
 	}
 
 	extensions, err := mime.ExtensionsByType(mediaType)

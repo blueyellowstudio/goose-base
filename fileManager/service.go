@@ -38,6 +38,9 @@ func NewService(
 	dbCbs domain.DBCallbacks,
 	logger *slog.Logger,
 ) *Service {
+	if txRunner == nil {
+		panic("fileManager.NewService: txRunner must not be nil")
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -54,10 +57,6 @@ func NewService(
 }
 
 func (s *Service) runInTx(ctx context.Context, operation string, fn func(ctx context.Context, tx txpkg.Transaction) error) error {
-	if s.txRunner == nil {
-		return fmt.Errorf("%s: tx runner is nil", operation)
-	}
-
 	if err := s.txRunner.RunInTx(ctx, fn); err != nil {
 		return fmt.Errorf("%s: %w", operation, err)
 	}
@@ -69,12 +68,9 @@ func (s *Service) runInTx(ctx context.Context, operation string, fn func(ctx con
 func (s *Service) CreateFolder(ctx context.Context, folder domain.Folder) (*domain.Folder, error) {
 	var result *domain.Folder
 	err := s.runInTx(ctx, "create folder", func(ctx context.Context, tx txpkg.Transaction) error {
-		var createErr error
-		result, createErr = s.folders.Create(ctx, tx, folder)
-		if createErr != nil {
-			return createErr
-		}
-		return nil
+		var err error
+		result, err = s.folders.Create(ctx, tx, folder)
+		return err
 	})
 	if err != nil {
 		return nil, err
@@ -134,8 +130,7 @@ func (s *Service) SoftDeleteFolder(ctx context.Context, folderID uuid.UUID) erro
 			if err := s.files.SoftDelete(ctx, tx, f.ID, deletedAt); err != nil {
 				return fmt.Errorf("soft delete folder: soft delete file %s: %w", f.ID, err)
 			}
-			fileCopy := f
-			if err := s.domainCbs.FileSoftDeleted(ctx, tx, fileCopy); err != nil {
+			if err := s.domainCbs.FileSoftDeleted(ctx, tx, f); err != nil {
 				return fmt.Errorf("soft delete folder: file callback %s: %w", f.ID, err)
 			}
 		}
@@ -145,8 +140,7 @@ func (s *Service) SoftDeleteFolder(ctx context.Context, folderID uuid.UUID) erro
 			if err := s.folders.SoftDelete(ctx, tx, f.ID, deletedAt); err != nil {
 				return fmt.Errorf("soft delete folder: soft delete folder %s: %w", f.ID, err)
 			}
-			folderCopy := f
-			if err := s.domainCbs.FolderSoftDeleted(ctx, tx, folderCopy); err != nil {
+			if err := s.domainCbs.FolderSoftDeleted(ctx, tx, f); err != nil {
 				return fmt.Errorf("soft delete folder: folder callback %s: %w", f.ID, err)
 			}
 		}
@@ -316,13 +310,9 @@ func (s *Service) GetDeviceDocuments(ctx context.Context, filter domain.AccessFi
 func (s *Service) CreateFileObject(ctx context.Context, obj domain.FileObject) (*domain.FileObject, error) {
 	var result *domain.FileObject
 	err := s.runInTx(ctx, "create file object", func(ctx context.Context, tx txpkg.Transaction) error {
-		var createErr error
-		result, createErr = s.objects.Create(ctx, tx, obj)
-		if createErr != nil {
-			return fmt.Errorf("create file object: %w", createErr)
-		}
-
-		return nil
+		var err error
+		result, err = s.objects.Create(ctx, tx, obj)
+		return err
 	})
 	if err != nil {
 		return nil, err
@@ -474,7 +464,3 @@ func (s *Service) GetAvailableFileObjects(ctx context.Context, fileID uuid.UUID)
 	return s.objects.ListAvailableByFileIDs(ctx, []uuid.UUID{fileID})
 }
 
-// GetAllFileObjects returns all file objects for a file regardless of availability.
-func (s *Service) GetAllFileObjects(ctx context.Context, fileID uuid.UUID) ([]domain.FileObject, error) {
-	return s.objects.ListByFile(ctx, fileID)
-}
