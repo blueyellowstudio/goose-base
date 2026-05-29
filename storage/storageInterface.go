@@ -13,15 +13,6 @@ type StorageConfig struct {
 	DownloadExpiry time.Duration
 }
 
-// SupabaseStorageConfig holds configuration for Supabase Storage.
-type SupabaseStorageConfig struct {
-	StorageURL       string
-	StoragePublicURL string
-	ServiceKey       string
-	UploadExpiry     time.Duration
-	DownloadExpiry   time.Duration
-}
-
 // Storage defines the interface for file storage operations
 type Storage interface {
 	GenerateUploadURL(bucket, objectKey string, mimeType *string) (*UploadInfo, error)

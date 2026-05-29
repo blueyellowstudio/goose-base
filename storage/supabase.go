@@ -23,6 +23,15 @@ type SupabaseStorage struct {
 	uploadExpiry     time.Duration
 }
 
+// SupabaseStorageConfig holds configuration for Supabase Storage.
+type SupabaseStorageConfig struct {
+	StorageURL       string
+	StoragePublicURL string
+	ServiceKey       string
+	UploadExpiry     time.Duration
+	DownloadExpiry   time.Duration
+}
+
 // NewSupabaseStorage creates a new SupabaseStorage instance
 func NewSupabaseStorage(cfg *SupabaseStorageConfig) (*SupabaseStorage, error) {
 	if cfg.StorageURL == "" {
