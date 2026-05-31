@@ -38,6 +38,6 @@ func (h *Handler) RegisterRoutes(r Routers) {
 	r.Create.Post("/documents/files/{fileID}/objects", h.createFileObject)
 	r.Update.Put("/documents/files/{fileID}/objects/{objectID}", h.updateFileObject)
 	r.Update.Delete("/documents/files/{fileID}/objects/{objectID}", h.softDeleteFileObject)
-	r.Read.Get("/documents/files/{fileID}/objects/{objectID}/upload-url", h.getUploadURL)
+	r.Update.Get("/documents/files/{fileID}/objects/{objectID}/upload-url", h.getUploadURL)
 	r.Update.Post("/documents/files/{fileID}/objects/{objectID}/stored-files/{storedFileID}/activate", h.activateStoredFile)
 }
