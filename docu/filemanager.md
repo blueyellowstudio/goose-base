@@ -267,8 +267,9 @@ All service methods live in `internal/fileManager/service.go`.
 
 | Function | Description |
 |----------|-------------|
-| `GetFolderContents(ctx, folderID, cursors, limit, filter)` | Returns child folders and files with cursor-based pagination. |
-| `GetDeviceDocuments(ctx, deviceModelID, filter)` | Lists documents assigned to a device model. |
+| `GetFolderContentsPaged(ctx, parentID, filter, folderCursor, fileCursor, limit, nameSearch)` | Returns child folders and files with cursor-based pagination. Fetches `limit+1` items; caller trims the extra to detect the next page. |
+| `GetFolderFilesPaged(ctx, folderID, filter, cursor, limit, nameSearch)` | Returns files in a folder only (no subfolders). Same pagination contract as above. |
+| `GetDeviceDocuments(ctx, filter)` | Lists all files visible to a specific device model/user-level combination. |
 
 ---
 
@@ -335,7 +336,7 @@ sequenceDiagram
 
 ## HTTP Endpoints
 
-All endpoints are under `/api/v1/documents/`. Auth is required on every route; mutations require elevated permission.
+Routes are registered by the library handlers (`Handler`, `DownloadHandler`, `BrowseHandler`) on project-supplied routers. The consuming project controls the base path and middleware. See `filemanager-handler.md` for the full route / router matrix.
 
 ### Folders
 
@@ -356,8 +357,8 @@ All endpoints are under `/api/v1/documents/`. Auth is required on every route; m
 | `PATCH` | `/documents/files/{fileID}` | Update file |
 | `DELETE` | `/documents/files/{fileID}` | Soft-delete file |
 | `POST` | `/documents/files/{fileID}/move` | Move file |
-| `GET` | `/documents/files/{fileID}/downloadMeta` | Get download metadata |
-| `GET` | `/documents/files/{fileID}/getUrl` | Get download URL (resolves default object) |
+| `GET` | `/documents/files/{fileID}/downloadMeta` | `DownloadHandler` — Get download metadata |
+| `GET` | `/documents/files/{fileID}/getUrl` | `DownloadHandler` — Get download URL (resolves best language variant) |
 
 ### FileObjects
 
@@ -367,7 +368,7 @@ All endpoints are under `/api/v1/documents/`. Auth is required on every route; m
 | `PUT` | `/documents/files/{fileID}/objects/{objectID}` | Update variant |
 | `DELETE` | `/documents/files/{fileID}/objects/{objectID}` | Soft-delete variant |
 | `GET` | `/documents/files/{fileID}/objects/{objectID}/upload-url` | Get pre-signed upload URL |
-| `GET` | `/documents/files/{fileID}/objects/{objectID}/download-url` | Get pre-signed download URL |
+| `GET` | `/documents/files/{fileID}/objects/{objectID}/download-url` | `DownloadHandler` — Get pre-signed download URL for a specific variant |
 | `POST` | `/documents/files/{fileID}/objects/{objectID}/stored-files/{storedFileID}/activate` | Activate upload |
 
 ### Access control
@@ -379,11 +380,12 @@ All endpoints are under `/api/v1/documents/`. Auth is required on every route; m
 
 ### Browse
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/companies/{companyID}/documents` | List root documents |
-| `GET` | `/companies/{companyID}/documents/folders/{folderID}` | List folder contents |
-| `GET` | `/devices/{deviceModelID}/documents` | List documents for a device |
+| Method | Path | Handler | Description |
+|--------|------|---------|-------------|
+| `GET` | `{prefix}/documents` | `BrowseHandler` | List root-level folders and files |
+| `GET` | `{prefix}/documents/folders/{folderID}` | `BrowseHandler` | List folder contents (folders + files) |
+| `GET` | `{prefix}/documents/folders/{folderID}/files` | `BrowseHandler` | List files in a folder only (no subfolders) |
+| `GET` | `/devices/{deviceModelID}/documents` | project-defined | List documents for a device model |
 
 ---
 

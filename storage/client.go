@@ -146,6 +146,23 @@ func (s *FileStorage) DeleteObject(bucket, objectKey string) error {
 	return nil
 }
 
+// DeleteObjects removes multiple files from storage
+func (s *FileStorage) DeleteObjects(bucket string, objectKeys []string) error {
+	var deleteErrors []error
+	for _, objectKey := range objectKeys {
+		if err := s.DeleteObject(bucket, objectKey); err != nil {
+			deleteErrors = append(deleteErrors, fmt.Errorf("failed to delete object %q: %w", objectKey, err))
+		}
+	}
+
+	if err := errors.Join(deleteErrors...); err != nil {
+		return err
+	}
+
+	slog.Info("Deleted objects", "bucket", bucket, "object_count", len(objectKeys))
+	return nil
+}
+
 // ListObjects lists all objects in a bucket with optional prefix
 func (s *FileStorage) ListObjects(bucket, prefix string) ([]string, error) {
 	bucketPath, err := s.safePath(bucket)

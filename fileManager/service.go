@@ -301,6 +301,23 @@ func (s *Service) GetFolderContentsPaged(
 	return folders, files, nil
 }
 
+// GetFolderFilesPaged returns a page of files in a folder without fetching subfolders.
+// Fetches limit+1 to allow next-page detection; the caller must trim the slice.
+func (s *Service) GetFolderFilesPaged(
+	ctx context.Context,
+	folderID *uuid.UUID,
+	filter domain.AccessFilter,
+	cursor *domain.Cursor,
+	limit int,
+	nameSearch *string,
+) ([]domain.FileWithObject, error) {
+	files, err := s.files.ListInFolderPaged(ctx, folderID, filter, cursor, limit+1, nameSearch)
+	if err != nil {
+		return nil, fmt.Errorf("get folder files paged: %w", err)
+	}
+	return files, nil
+}
+
 // GetDeviceDocuments returns all files accessible by a given device model.
 func (s *Service) GetDeviceDocuments(ctx context.Context, filter domain.AccessFilter) ([]domain.File, error) {
 	return s.files.ListFiles(ctx, filter)

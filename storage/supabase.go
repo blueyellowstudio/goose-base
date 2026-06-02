@@ -222,6 +222,46 @@ func (s *SupabaseStorage) DeleteObject(bucket, objectKey string) error {
 	return nil
 }
 
+// DeleteObjects removes multiple files from Supabase Storage
+func (s *SupabaseStorage) DeleteObjects(bucket string, objectKeys []string) error {
+	if len(objectKeys) == 0 {
+		return nil
+	}
+
+	// Supabase Storage API: DELETE /object/{bucket}
+	endpoint := fmt.Sprintf("%s/object/%s", s.storageURL, bucket)
+	body := map[string]interface{}{
+		"prefixes": objectKeys,
+	}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request body: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, endpoint, bytes.NewReader(jsonBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	s.setAuthHeaders(req)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to delete objects: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// 200 OK or 404 Not Found are both acceptable
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to delete objects: %s - %s", resp.Status, string(body))
+	}
+
+	slog.Info("Deleted objects from Supabase", "bucket", bucket, "object_count", len(objectKeys))
+	return nil
+}
+
 // ListObjects lists all objects in a bucket with optional prefix
 func (s *SupabaseStorage) ListObjects(bucket, prefix string) ([]string, error) {
 	// Supabase Storage API: POST /object/list/{bucket}
