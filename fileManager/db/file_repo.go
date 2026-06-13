@@ -137,7 +137,15 @@ func (r *FileRepository) SoftDelete(ctx context.Context, tx txpkg.Transaction, i
 		return fmt.Errorf("soft delete file: %w", err)
 	}
 
-	query := fmt.Sprintf(`UPDATE %s SET deleted_at = $1 WHERE id = $2`, r.tables.Files)
+	query := fmt.Sprintf(`
+		WITH updated AS (
+			UPDATE %s SET deleted_at = $1 WHERE id = $2
+			RETURNING id
+		)
+		INSERT INTO %s (entity_type, entity_id, file_id, deleted_at)
+		SELECT 'file', id, id, $1 FROM updated`,
+		r.tables.Files, r.tables.DeletedItems,
+	)
 	_, err = pgxTx.Exec(ctx, query, deletedAt, id)
 	if err != nil {
 		return fmt.Errorf("soft delete file: %w", err)
@@ -145,7 +153,7 @@ func (r *FileRepository) SoftDelete(ctx context.Context, tx txpkg.Transaction, i
 	return nil
 }
 
-func (r *FileRepository) ListInFolder(ctx context.Context, folderID uuid.UUID, filter domain.AccessFilter) ([]domain.FileWithObject, error) {
+func (r *FileRepository) ListInFolder(ctx context.Context, folderID uuid.UUID, filter domain.AccessFilter, sort []domain.SortBy) ([]domain.FileWithObject, error) {
 	clause, args := filter.SQLWhereClause("f", 2)
 
 	query := fmt.Sprintf(`
@@ -191,6 +199,8 @@ func (r *FileRepository) ListInFolder(ctx context.Context, folderID uuid.UUID, f
 		query += " AND " + clause
 	}
 
+	r.applySorting(sort, query)
+
 	rows, err := r.pool.Query(ctx, query, append([]any{folderID}, args...)...)
 	if err != nil {
 		return nil, fmt.Errorf("list files in folder: %w", err)
@@ -200,7 +210,17 @@ func (r *FileRepository) ListInFolder(ctx context.Context, folderID uuid.UUID, f
 	return scanFilesWithObject(rows)
 }
 
-func (r *FileRepository) ListInFolderPaged(ctx context.Context, folderID *uuid.UUID, filter domain.AccessFilter, cursor *domain.Cursor, limit int, nameSearch *string) ([]domain.FileWithObject, error) {
+func (r *FileRepository) applySorting(sort []domain.SortBy, query string) {
+	for _, s := range sort {
+		orderDir := "ASC"
+		if s.DESC {
+			orderDir = "DESC"
+		}
+		query += fmt.Sprintf(" ORDER BY %s %s", s.Keyword, orderDir)
+	}
+}
+
+func (r *FileRepository) ListInFolderPaged(ctx context.Context, folderID *uuid.UUID, filter domain.AccessFilter, cursor *domain.Cursor, limit int, nameSearch *string, sort []domain.SortBy) ([]domain.FileWithObject, error) {
 	args := []any{folderID}
 	argOffset := 2
 
@@ -265,6 +285,8 @@ func (r *FileRepository) ListInFolderPaged(ctx context.Context, folderID *uuid.U
 		argOffset++
 	}
 
+	r.applySorting(sort, query)
+
 	query += fmt.Sprintf(" ORDER BY f.name ASC, f.id ASC LIMIT $%d", argOffset)
 	args = append(args, limit)
 
@@ -277,7 +299,7 @@ func (r *FileRepository) ListInFolderPaged(ctx context.Context, folderID *uuid.U
 	return scanFilesWithObject(rows)
 }
 
-func (r *FileRepository) ListFiles(ctx context.Context, filter domain.AccessFilter) ([]domain.File, error) {
+func (r *FileRepository) ListFiles(ctx context.Context, filter domain.AccessFilter, sort []domain.SortBy) ([]domain.File, error) {
 	clause, args := filter.SQLWhereClause("f", 1)
 
 	query := fmt.Sprintf(`
@@ -290,6 +312,8 @@ func (r *FileRepository) ListFiles(ctx context.Context, filter domain.AccessFilt
 	if clause != "" {
 		query += " AND " + clause
 	}
+
+	r.applySorting(sort, query)
 
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {

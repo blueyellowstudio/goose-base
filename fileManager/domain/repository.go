@@ -15,9 +15,9 @@ type FileRepository interface {
 	GetByIDTx(ctx context.Context, tx txpkg.Transaction, id uuid.UUID) (*File, error)
 	Update(ctx context.Context, tx txpkg.Transaction, file File) error
 	SoftDelete(ctx context.Context, tx txpkg.Transaction, id uuid.UUID, deletedAt time.Time) error
-	ListInFolder(ctx context.Context, folderID uuid.UUID, filter AccessFilter) ([]FileWithObject, error)
-	ListInFolderPaged(ctx context.Context, folderID *uuid.UUID, filter AccessFilter, cursor *Cursor, limit int, nameSearch *string) ([]FileWithObject, error)
-	ListFiles(ctx context.Context, filter AccessFilter) ([]File, error)
+	ListInFolder(ctx context.Context, folderID uuid.UUID, filter AccessFilter, sort []SortBy) ([]FileWithObject, error)
+	ListInFolderPaged(ctx context.Context, folderID *uuid.UUID, filter AccessFilter, cursor *Cursor, limit int, nameSearch *string, sort []SortBy) ([]FileWithObject, error)
+	ListFiles(ctx context.Context, filter AccessFilter, sort []SortBy) ([]File, error)
 	ListByFolderIDs(ctx context.Context, folderIDs []uuid.UUID) ([]File, error)
 	ListByFolderIDsTx(ctx context.Context, tx txpkg.Transaction, folderIDs []uuid.UUID) ([]File, error)
 }
@@ -78,4 +78,11 @@ type StoredFileRepository interface {
 	ListPendingOlderThan(ctx context.Context, cutoff time.Time) ([]StoredFile, error)
 	// ListDeleted returns all StoredFiles with deleted_at set.
 	ListDeleted(ctx context.Context) ([]StoredFile, error)
+}
+
+// DeletedItemRepository provides read access to the deletion log. Entries are
+// written by FileRepository.SoftDelete and FileObjectRepository.SoftDelete.
+type DeletedItemRepository interface {
+	// ListSince returns all deletion tombstones recorded after the given time, ordered by deleted_at ascending.
+	ListSince(ctx context.Context, since time.Time) ([]DeletedItem, error)
 }

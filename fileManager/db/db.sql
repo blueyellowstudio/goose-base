@@ -67,3 +67,15 @@ CREATE TABLE stored_files
 );
 CREATE INDEX stored_files_file_obj_id_idx ON stored_files (file_obj_id);
 CREATE INDEX stored_files_status_idx ON stored_files (status) WHERE deleted_at IS NULL;
+
+-- Deletion log (tombstones) for offline sync: records files and file objects as they
+-- are soft-deleted so clients can purge locally cached copies.
+CREATE TABLE deleted_items
+(
+    id          UUID PRIMARY KEY     DEFAULT gen_random_uuid(),
+    entity_type TEXT        NOT NULL,
+    entity_id   UUID        NOT NULL,
+    file_id     UUID        NOT NULL,
+    deleted_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX deleted_items_deleted_at_idx ON deleted_items (deleted_at);

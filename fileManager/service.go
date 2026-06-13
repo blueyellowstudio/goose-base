@@ -18,14 +18,15 @@ var ErrFileNotFound = errors.New("file not found")
 var ErrFileObjectNotFound = errors.New("file object not found")
 
 type Service struct {
-	txRunner    txpkg.Runner
-	files       domain.FileRepository
-	folders     domain.FolderRepository
-	objects     domain.FileObjectRepository
-	storedFiles domain.StoredFileRepository
-	domainCbs   domain.DomainCallbacks
-	dbCbs       domain.DBCallbacks
-	logger      *slog.Logger
+	txRunner     txpkg.Runner
+	files        domain.FileRepository
+	folders      domain.FolderRepository
+	objects      domain.FileObjectRepository
+	storedFiles  domain.StoredFileRepository
+	deletedItems domain.DeletedItemRepository
+	domainCbs    domain.DomainCallbacks
+	dbCbs        domain.DBCallbacks
+	logger       *slog.Logger
 }
 
 func NewService(
@@ -34,6 +35,7 @@ func NewService(
 	folders domain.FolderRepository,
 	objects domain.FileObjectRepository,
 	storedFiles domain.StoredFileRepository,
+	deletedItems domain.DeletedItemRepository,
 	domainCbs domain.DomainCallbacks,
 	dbCbs domain.DBCallbacks,
 	logger *slog.Logger,
@@ -45,14 +47,15 @@ func NewService(
 		logger = slog.Default()
 	}
 	return &Service{
-		txRunner:    txRunner,
-		files:       files,
-		folders:     folders,
-		objects:     objects,
-		storedFiles: storedFiles,
-		domainCbs:   domainCbs,
-		dbCbs:       dbCbs,
-		logger:      logger,
+		txRunner:     txRunner,
+		files:        files,
+		folders:      folders,
+		objects:      objects,
+		storedFiles:  storedFiles,
+		deletedItems: deletedItems,
+		domainCbs:    domainCbs,
+		dbCbs:        dbCbs,
+		logger:       logger,
 	}
 }
 
@@ -268,7 +271,7 @@ func (s *Service) GetFolderContents(ctx context.Context, parentID *uuid.UUID, fi
 		return folders, []domain.FileWithObject{}, nil
 	}
 
-	files, err := s.files.ListInFolder(ctx, *parentID, filter)
+	files, err := s.files.ListInFolder(ctx, *parentID, filter, domain.NewSortBySingle("name"))
 	if err != nil {
 		return nil, nil, fmt.Errorf("get folder contents: files: %w", err)
 	}
@@ -293,7 +296,7 @@ func (s *Service) GetFolderContentsPaged(
 		return nil, nil, fmt.Errorf("get folder contents paged: folders: %w", err)
 	}
 
-	files, err = s.files.ListInFolderPaged(ctx, parentID, filter, fileCursor, limit+1, nameSearch)
+	files, err = s.files.ListInFolderPaged(ctx, parentID, filter, fileCursor, limit+1, nameSearch, domain.NewSortBySingle("name"))
 	if err != nil {
 		return nil, nil, fmt.Errorf("get folder contents paged: files: %w", err)
 	}
@@ -311,7 +314,7 @@ func (s *Service) GetFolderFilesPaged(
 	limit int,
 	nameSearch *string,
 ) ([]domain.FileWithObject, error) {
-	files, err := s.files.ListInFolderPaged(ctx, folderID, filter, cursor, limit+1, nameSearch)
+	files, err := s.files.ListInFolderPaged(ctx, folderID, filter, cursor, limit+1, nameSearch, domain.NewSortBySingle("name"))
 	if err != nil {
 		return nil, fmt.Errorf("get folder files paged: %w", err)
 	}
@@ -320,7 +323,7 @@ func (s *Service) GetFolderFilesPaged(
 
 // GetDeviceDocuments returns all files accessible by a given device model.
 func (s *Service) GetDeviceDocuments(ctx context.Context, filter domain.AccessFilter) ([]domain.File, error) {
-	return s.files.ListFiles(ctx, filter)
+	return s.files.ListFiles(ctx, filter, domain.NewSortBySingle("name"))
 }
 
 // CreateFileObject creates a new file object variant.
@@ -481,3 +484,8 @@ func (s *Service) GetAvailableFileObjects(ctx context.Context, fileID uuid.UUID)
 	return s.objects.ListAvailableByFileIDs(ctx, []uuid.UUID{fileID})
 }
 
+// ListDeletedItemsSince returns deletion tombstones for files and file objects soft-deleted
+// after the given time, for offline clients to purge locally cached objects.
+func (s *Service) ListDeletedItemsSince(ctx context.Context, since time.Time) ([]domain.DeletedItem, error) {
+	return s.deletedItems.ListSince(ctx, since)
+}

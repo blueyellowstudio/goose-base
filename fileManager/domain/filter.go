@@ -1,5 +1,10 @@
 package domain
 
+import (
+	"fmt"
+	"time"
+)
+
 // AccessFilter is injected at query time to restrict which documents a caller may see.
 // Implementations live in the project layer.
 type AccessFilter interface {
@@ -15,3 +20,37 @@ type AccessFilter interface {
 type NoFilter struct{}
 
 func (NoFilter) SQLWhereClause(string, int) (string, []any) { return "", nil }
+
+type AccessFilterGrouped struct {
+	Filters []AccessFilter
+}
+
+func NewAccessFilterGrouped(filters ...AccessFilter) AccessFilter {
+	return AccessFilterGrouped{Filters: filters}
+}
+
+func (a AccessFilterGrouped) SQLWhereClause(tableAlias string, argOffset int) (clause string, args []any) {
+	for _, filter := range a.Filters {
+		thisClauses, thisArgs := filter.SQLWhereClause(tableAlias, argOffset)
+
+		clause += " AND " + thisClauses
+		args = append(args, thisArgs...)
+
+		argOffset += len(thisArgs)
+	}
+
+	return clause, args
+}
+
+type AfterUpdatedAtFilter struct {
+	UpdatedAt time.Time
+}
+
+func (f AfterUpdatedAtFilter) SQLWhereClause(alias string, n int) (string, []any) {
+	var args []any
+	clause := fmt.Sprintf(
+		"%s.updated_at > $%d",
+		alias, n,
+	)
+	return clause, append(args, f.UpdatedAt)
+}

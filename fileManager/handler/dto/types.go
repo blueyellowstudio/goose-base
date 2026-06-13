@@ -61,3 +61,8 @@ type FolderFilesResponse struct {
 	Files          json.RawMessage `json:"files"`
 	FileNextCursor *string         `json:"fileNextCursor,omitempty"`
 }
+
+// DeletedItemsResponse is the response for the deleted-items sync endpoint.
+type DeletedItemsResponse struct {
+	Items []domain.DeletedItem `json:"items"`
+}

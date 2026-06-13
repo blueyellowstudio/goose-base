@@ -247,7 +247,15 @@ func (r *FileObjectRepository) SoftDelete(ctx context.Context, tx txpkg.Transact
 		return fmt.Errorf("soft delete file object: %w", err)
 	}
 
-	query := fmt.Sprintf(`UPDATE %s SET deleted_at = $1 WHERE id = $2`, r.tables.FileObjects)
+	query := fmt.Sprintf(`
+		WITH updated AS (
+			UPDATE %s SET deleted_at = $1 WHERE id = $2
+			RETURNING id, file_id
+		)
+		INSERT INTO %s (entity_type, entity_id, file_id, deleted_at)
+		SELECT 'file_object', id, file_id, $1 FROM updated`,
+		r.tables.FileObjects, r.tables.DeletedItems,
+	)
 	_, err = pgxTx.Exec(ctx, query, time.Now(), id)
 	if err != nil {
 		return fmt.Errorf("soft delete file object: %w", err)

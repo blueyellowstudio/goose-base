@@ -40,4 +40,7 @@ func (h *Handler) RegisterRoutes(r Routers) {
 	r.Update.Delete("/documents/files/{fileID}/objects/{objectID}", h.softDeleteFileObject)
 	r.Update.Get("/documents/files/{fileID}/objects/{objectID}/upload-url", h.getUploadURL)
 	r.Update.Post("/documents/files/{fileID}/objects/{objectID}/stored-files/{storedFileID}/activate", h.activateStoredFile)
+
+	// Deleted items (offline sync)
+	r.Read.Get("/documents/deleted", h.listDeletedItems)
 }
