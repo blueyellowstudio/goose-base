@@ -12,7 +12,9 @@ type LoginRedirectConfig struct {
 	TokenLoginPath                           string
 	LoginErrorPath                           string
 	AcceptInvitePath                         string
-	SetPasswordPath                          string
+
+	// frontend url to direct to for the reset password flow
+	SetPasswordPath string
 }
 
 type Authentication struct {
