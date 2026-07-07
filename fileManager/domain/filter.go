@@ -21,15 +21,12 @@ type NoFilter struct{}
 
 func (NoFilter) SQLWhereClause(string, int) (string, []any) { return "", nil }
 
-
 type AccessFilterGropuedCondition string
-
 
 const (
 	ConditionAnd AccessFilterGropuedCondition = "AND"
 	ConditionOr  AccessFilterGropuedCondition = "OR"
 )
-
 
 type AccessFilterGrouped struct {
 	Filters   []AccessFilter
@@ -42,10 +39,14 @@ func NewAccessFilterGrouped(cond AccessFilterGropuedCondition, filters ...Access
 
 func (a AccessFilterGrouped) SQLWhereClause(tableAlias string, argOffset int) (clause string, args []any) {
 	clause += "("
-	for _, filter := range a.Filters {
+	for i, filter := range a.Filters {
 		thisClauses, thisArgs := filter.SQLWhereClause(tableAlias, argOffset)
 
-		clause += " " + string(a.Condition) + " " + thisClauses
+		if i > 0 {
+			clause += " " + string(a.Condition) + " " + thisClauses
+		} else {
+			clause += thisClauses
+		}
 		args = append(args, thisArgs...)
 
 		argOffset += len(thisArgs)
