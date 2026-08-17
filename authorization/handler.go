@@ -15,7 +15,7 @@ func (a *Authorization) Handler(next http.Handler) http.Handler {
 		ctx, gotUser := a.getContextWithUser(r)
 		if !gotUser {
 
-			slog.Info("Authorization failed")
+			slog.Error("Authorization failed", "status", http.StatusUnauthorized, "path", r.URL.Path)
 			http.Error(w, "Authorization Failed", http.StatusUnauthorized)
 			return
 		}
@@ -49,19 +49,19 @@ func (a *Authorization) getContextWithUser(r *http.Request) (context.Context, bo
 
 	token := a.extractToken(r)
 	if token == "" {
-		slog.Info("No authorization token found")
+		slog.Error("No authorization token found", "status", http.StatusUnauthorized, "path", r.URL.Path)
 		return ctx, false
 	}
 
 	claims, err := a.validateToken(token)
 	if err != nil {
-		slog.Info("Token validation failed", "error", err)
+		slog.Error("Token validation failed", "status", http.StatusUnauthorized, "path", r.URL.Path, "error", err)
 		return ctx, false
 	}
 
 	nextCtx, err := a.TokenHandler.CreateContext(ctx, claims)
 	if err != nil {
-		slog.Info("Token validation failed", "error", err)
+		slog.Error("Token validation failed", "status", http.StatusUnauthorized, "path", r.URL.Path, "error", err)
 		return ctx, false
 	}
 
@@ -69,15 +69,24 @@ func (a *Authorization) getContextWithUser(r *http.Request) (context.Context, bo
 }
 
 func (a *Authorization) validateToken(tokenString string) (jwt.MapClaims, error) {
-	token, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
+	validMethods := make([]string, 0, 2)
+	if len(a.jwtSecret) > 0 {
+		validMethods = append(validMethods, "HS256")
+	}
+	if a.jwks != nil {
+		validMethods = append(validMethods, "ES256")
+	}
 
-		// Enforce HS256
-		if t.Method != jwt.SigningMethodHS256 {
+	token, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
+		switch t.Method.Alg() {
+		case "HS256":
+			return a.jwtSecret, nil
+		case "ES256":
+			return a.jwks.Keyfunc(t)
+		default:
 			return nil, errors.New("unexpected signing method")
 		}
-
-		return a.jwtSecret, nil
-	})
+	}, jwt.WithValidMethods(validMethods))
 
 	if err != nil || !token.Valid {
 		return nil, errors.New("invalid token")
