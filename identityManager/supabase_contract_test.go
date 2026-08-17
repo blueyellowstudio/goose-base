@@ -16,6 +16,12 @@ type contractBackend struct {
 	validAuthEmail       string
 	validAuthPassword    string
 	supportsSuccessfulAuth bool
+	// validOAuthCode and validOAuthVerifier are only meaningful when the backend can be
+	// driven through a successful PKCE exchange, which a live Supabase project cannot be
+	// from a test.
+	validOAuthCode     string
+	validOAuthVerifier string
+	supportsOAuthExchange bool
 }
 
 func selectedIdentityManagerBackends(t *testing.T) []string {
@@ -61,6 +67,18 @@ func newMockContractBackend() contractBackend {
 					}
 					w.WriteHeader(http.StatusUnauthorized)
 					_, _ = w.Write([]byte(`{"message":"invalid refresh token"}`))
+				case r.Method == http.MethodPost && r.URL.Path == "/auth/v1/token" && r.URL.Query().Get("grant_type") == "pkce":
+					// The field names below are the wire contract with GoTrue. Getting
+					// them wrong fails only against a real project, so pin them here.
+					var req map[string]string
+					_ = json.NewDecoder(r.Body).Decode(&req)
+					if req["auth_code"] == "valid-auth-code" && req["code_verifier"] == "valid-verifier" {
+						w.WriteHeader(http.StatusOK)
+						_, _ = w.Write([]byte(`{"access_token":"oauth-access","refresh_token":"oauth-refresh"}`))
+						return
+					}
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(`{"error_description":"invalid request: both auth code and code verifier should be non-empty"}`))
 				default:
 					w.WriteHeader(http.StatusNotFound)
 				}
@@ -71,6 +89,9 @@ func newMockContractBackend() contractBackend {
 		validAuthEmail:       "valid@example.com",
 		validAuthPassword:    "Password1",
 		supportsSuccessfulAuth: true,
+		validOAuthCode:        "valid-auth-code",
+		validOAuthVerifier:    "valid-verifier",
+		supportsOAuthExchange: true,
 	}
 }
 
@@ -132,6 +153,28 @@ func runIdentityManagerContractSuite(t *testing.T, backend contractBackend) {
 		}
 		if resp.RefreshToken == "" {
 			t.Fatalf("%s backend: expected non-empty refresh token", backend.name)
+		}
+	})
+
+	t.Run("ExchangeOAuthCode_InvalidCode_ReturnsError", func(t *testing.T) {
+		m := backend.newManager(t)
+		_, err := m.ExchangeOAuthCode(context.Background(), "invalid-auth-code", "invalid-verifier")
+		if err == nil {
+			t.Fatalf("%s backend: expected an error for an invalid authorization code", backend.name)
+		}
+	})
+
+	t.Run("ExchangeOAuthCode_Success_ReturnsTokens", func(t *testing.T) {
+		if !backend.supportsOAuthExchange {
+			t.Skip("successful PKCE exchange contract skipped: no usable authorization code for this backend")
+		}
+		m := backend.newManager(t)
+		resp, err := m.ExchangeOAuthCode(context.Background(), backend.validOAuthCode, backend.validOAuthVerifier)
+		if err != nil {
+			t.Fatalf("%s backend: expected a successful exchange, got error: %v", backend.name, err)
+		}
+		if resp == nil || resp.AccessToken == "" || resp.RefreshToken == "" {
+			t.Fatalf("%s backend: expected both tokens from the exchange, got %+v", backend.name, resp)
 		}
 	})
 }

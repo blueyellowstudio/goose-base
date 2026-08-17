@@ -14,7 +14,12 @@ type TokenHandler interface {
 	GetIdentityFromContext(ctx context.Context) (ContextIdentity, error)
 }
 
+// ContextIdentity is the identity a TokenHandler derives from the token claims.
+// Username and Role are what a client needs to render its shell and gate routes,
+// so every GetIdentityFromContext implementation must fill them.
 type ContextIdentity struct {
 	UserID    uuid.UUID
 	UserEmail string
+	Username  string
+	Role      string
 }

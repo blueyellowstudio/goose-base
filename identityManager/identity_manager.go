@@ -15,6 +15,10 @@ const (
 	EmailOtpTypeMagicLink   EmailOtpType = "magiclink"
 	EmailOtpTypeInvite      EmailOtpType = "invite"
 	EmailOtpTypeEmailChange EmailOtpType = "email_change"
+	// EmailOtpTypeEmail verifies the numeric code from a passwordless sign-in — the one
+	// SendMagicLink's email carries as {{ .Token }}. Supabase treats it as a distinct type
+	// from EmailOtpTypeMagicLink, which verifies a link's token_hash instead.
+	EmailOtpTypeEmail EmailOtpType = "email"
 )
 
 type CreateUserRequest struct {
@@ -54,6 +58,9 @@ type IdentityManager interface {
 	RefreshToken(ctx context.Context, refreshToken string) (*AuthResponse, error)
 	VerifyEmailOtp(ctx context.Context, email, token string, otpType EmailOtpType) (*AuthResponse, error)
 	VerifyTokenHash(ctx context.Context, tokenHash, linkType string) (*AuthResponse, error)
+	// ExchangeOAuthCode trades an OAuth authorization code plus its PKCE verifier for a
+	// session. It exists so the OAuth handlers never speak HTTP to the provider directly.
+	ExchangeOAuthCode(ctx context.Context, code, verifier string) (*AuthResponse, error)
 	SendMagicLink(ctx context.Context, email string) error
 	SendPasswordResetEmail(ctx context.Context, email string) error
 	ResendVerificationEmail(ctx context.Context, email string) error

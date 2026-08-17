@@ -211,16 +211,47 @@ func (s *SupabaseIdentityManager) VerifyTokenHash(ctx context.Context, tokenHash
 	return &resp, nil
 }
 
+// ExchangeOAuthCode completes a PKCE authorization: the code arrives at the service's
+// callback, the verifier from the cookie proves the exchange belongs to the browser that
+// started the flow, and Supabase answers with the session tokens.
+func (s *SupabaseIdentityManager) ExchangeOAuthCode(ctx context.Context, code, verifier string) (*AuthResponse, error) {
+	body, status, err := s.doAnonRequest(ctx, http.MethodPost,
+		s.supabaseURL+"/auth/v1/token?grant_type=pkce",
+		map[string]string{"auth_code": code, "code_verifier": verifier},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("supabase exchange oauth code: %w", err)
+	}
+	if status != http.StatusOK {
+		return nil, parseAnonError(body, status, "supabase exchange oauth code")
+	}
+	var resp AuthResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("supabase exchange oauth code: failed to parse response: %w", err)
+	}
+	return &resp, nil
+}
+
+// SendMagicLink emails a passwordless sign-in to an EXISTING user, and deliberately does
+// not create one.
+//
+// It posts to /auth/v1/otp with create_user=false rather than the deprecated
+// /auth/v1/magiclink, which creates a user for any address it is handed. The endpoint is
+// typically reached from a public login form, so auto-creation there turns a login screen
+// into an unauthenticated account-creation and email-enumeration surface.
+//
+// Verify the resulting code with EmailOtpTypeEmail, or the link's token_hash with
+// VerifyTokenHash.
 func (s *SupabaseIdentityManager) SendMagicLink(ctx context.Context, email string) error {
-	body, status, err := s.doServiceRequest(ctx, http.MethodPost,
-		s.supabaseURL+"/auth/v1/magiclink",
-		map[string]string{"email": email},
+	body, status, err := s.doAnonRequest(ctx, http.MethodPost,
+		s.supabaseURL+"/auth/v1/otp",
+		map[string]interface{}{"email": email, "create_user": false},
 	)
 	if err != nil {
 		return fmt.Errorf("supabase magic link: %w", err)
 	}
 	if status != http.StatusOK {
-		return parseAdminError(body, status, "supabase magic link")
+		return parseAnonError(body, status, "supabase magic link")
 	}
 	return nil
 }
