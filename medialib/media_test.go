@@ -2,6 +2,8 @@ package medialib
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,9 +79,13 @@ func (r *fakeMediaRepo) HardDelete(_ context.Context, _ txpkg.Transaction, id uu
 	return nil
 }
 
-type fakeObjectRepo struct{ items map[uuid.UUID]domain.MediaObject }
+type fakeObjectRepo struct {
+	items map[uuid.UUID]domain.MediaObject
+}
 
-func newFakeObjectRepo() *fakeObjectRepo { return &fakeObjectRepo{items: map[uuid.UUID]domain.MediaObject{}} }
+func newFakeObjectRepo() *fakeObjectRepo {
+	return &fakeObjectRepo{items: map[uuid.UUID]domain.MediaObject{}}
+}
 
 func (r *fakeObjectRepo) Create(_ context.Context, _ txpkg.Transaction, o domain.MediaObject) (*domain.MediaObject, error) {
 	o.CreatedAt = time.Now()
@@ -169,13 +175,22 @@ type fakeStorage struct {
 	exists  bool
 	size    int64
 	deleted []string
+
+	// arguments of the last GenerateDownloadURL call, for signed-read assertions
+	signedBucket string
+	signedKey    string
 }
 
 func (f *fakeStorage) GenerateUploadURL(bucket, objectKey string, _ *string) (*storage.UploadInfo, error) {
 	return &storage.UploadInfo{URL: "upload://" + bucket + "/" + objectKey, ObjectKey: objectKey, Bucket: bucket}, nil
 }
-func (f *fakeStorage) GenerateDownloadURL(_, _, _ string, _ bool) (*storage.DownloadInfo, error) {
-	return &storage.DownloadInfo{}, nil
+func (f *fakeStorage) GenerateDownloadURL(bucket, objectKey, _ string, _ bool) (*storage.DownloadInfo, error) {
+	f.signedBucket = bucket
+	f.signedKey = objectKey
+	return &storage.DownloadInfo{
+		URL:       "signed://" + bucket + "/" + objectKey + "?token=t",
+		ExpiresAt: time.Unix(1700000000, 0).UTC(),
+	}, nil
 }
 func (f *fakeStorage) DeleteObject(_, objectKey string) error {
 	f.deleted = append(f.deleted, objectKey)
@@ -351,5 +366,86 @@ func TestHardDeleteMediaObjectWritesTrail(t *testing.T) {
 	}
 	if len(dr.items) != 1 {
 		t.Fatalf("deletion repo entries = %d, want 1", len(dr.items))
+	}
+}
+
+func TestGetActiveSignedURLSignsTheSamePathAsGetActiveURL(t *testing.T) {
+	ctx := context.Background()
+	store := &fakeStorage{exists: true, size: 7}
+	svc, _, _, _ := newTestService(store)
+
+	m, _ := svc.CreateMedia(ctx, "", "video")
+	_, obj, _ := svc.CreateMediaObject(ctx, m.ID, "video/mp4", "mp4", nil)
+	if err := svc.ActivateMediaObject(ctx, obj.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	signed, err := svc.GetActiveSignedURL(ctx, m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The whole point of signing inside the library: the object key handed to the
+	// store is the one objectPath builds, so the read side cannot drift from the
+	// path the object was uploaded to.
+	wantKey := ObjectPath(m.StorageKey, obj.ID, "mp4")
+	if store.signedKey != wantKey {
+		t.Fatalf("signed object key = %q, want %q", store.signedKey, wantKey)
+	}
+	if store.signedBucket != "media" {
+		t.Fatalf("signed bucket = %q, want %q", store.signedBucket, "media")
+	}
+
+	if signed.Type != "video" {
+		t.Fatalf("type = %q, want %q", signed.Type, "video")
+	}
+	if signed.URL != "signed://media/"+wantKey+"?token=t" {
+		t.Fatalf("url = %q", signed.URL)
+	}
+	if signed.ExpiresAt.IsZero() {
+		t.Fatal("expiresAt must be set; clients cache against it")
+	}
+}
+
+// An image resolves through the same signing path — no render/transform URL, since
+// Supabase applies transforms at signing time and the store does not pass one.
+func TestGetActiveSignedURLDoesNotUseTheRenderEndpoint(t *testing.T) {
+	ctx := context.Background()
+	store := &fakeStorage{exists: true, size: 7}
+	svc, _, _, _ := newTestService(store)
+
+	m, _ := svc.CreateMedia(ctx, "", "image")
+	_, obj, _ := svc.CreateMediaObject(ctx, m.ID, "image/jpeg", "jpg", nil)
+	if err := svc.ActivateMediaObject(ctx, obj.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	signed, err := svc.GetActiveSignedURL(ctx, m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(signed.URL, "render/image") {
+		t.Fatalf("signed url must not be a render URL, got %q", signed.URL)
+	}
+	if store.signedKey != ObjectPath(m.StorageKey, obj.ID, "jpg") {
+		t.Fatalf("signed object key = %q", store.signedKey)
+	}
+}
+
+func TestGetActiveSignedURLErrors(t *testing.T) {
+	ctx := context.Background()
+	store := &fakeStorage{exists: true}
+	svc, _, _, _ := newTestService(store)
+
+	if _, err := svc.GetActiveSignedURL(ctx, uuid.New()); !errors.Is(err, ErrMediaNotFound) {
+		t.Fatalf("unknown media: err = %v, want ErrMediaNotFound", err)
+	}
+
+	m, _ := svc.CreateMedia(ctx, "", "image")
+	if _, err := svc.GetActiveSignedURL(ctx, m.ID); !errors.Is(err, ErrNoActiveObject) {
+		t.Fatalf("no active object: err = %v, want ErrNoActiveObject", err)
+	}
+	if store.signedKey != "" {
+		t.Fatal("nothing should have been signed when there is no active object")
 	}
 }

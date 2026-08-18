@@ -135,11 +135,16 @@ At most one object per media is `active` at a time. This is enforced two ways:
 
 ### Access model & URL resolution
 
-Reads are **not signed** by the library — they are gated by Supabase **RLS** (an
-authenticated-read policy on the bucket); the client attaches its Supabase JWT. The
-library issues presigned URLs only for **uploads**.
+Reads are gated by Supabase **RLS** — a single authenticated-read policy on the
+bucket, so **any logged-in user may read any object**. There is no per-object
+ownership to enforce; the gate is "is there a valid session".
 
-`GetActiveURL` returns a fully-built read URL for a media's active object:
+Reads come in two shapes. The difference is only **where the credential lives**.
+
+**1. Header-credentialed — `GetActiveURL` / `ResolveActiveURLs`**
+
+The caller attaches its own Supabase JWT (`Authorization: Bearer …`). This is what
+the native/mobile client uses, and the only shape that supports image resizing:
 
 - **image type** → `…/render/image/authenticated/<bucket>/<path>` — no param ⇒
   original; the app appends `?width=<n>` ⇒ a resized, edge-cached image.
@@ -147,6 +152,30 @@ library issues presigned URLs only for **uploads**.
   not apply; the app uses an image poster for thumbnails.
 
 Which `type` values count as images is configurable via `NewURLBuilder`.
+
+**2. Self-credentialed — `GetActiveSignedURL`**
+
+A signed URL carrying a short-lived token in its query string
+(`…/object/sign/<bucket>/<path>?token=…`), so it needs no header at all.
+
+This exists for clients that **cannot** set one — a browser holding its session in
+an `HttpOnly` cookie. Supabase's storage API reads the bearer token from the
+`Authorization` header **only, never from a cookie**, so the `/authenticated/` URLs
+above are simply unreachable from such a client, same-origin or not.
+
+Two consequences beyond the credential:
+
+- **Usable directly as an `<img>`/`<video>` src**, and it supports **range
+  requests** — so video seeking works. Fetching an `/authenticated/` URL into a
+  `blob:` object URL, the usual workaround, defeats both.
+- **No transform.** Supabase applies image transforms at *signing* time and the
+  library does not pass one, so a signed URL always returns the original.
+
+Signing uses the **service role key**, which bypasses RLS. That is not an
+escalation here: it grants exactly what the authenticated-read policy already
+grants every logged-in user. Callers are still expected to have a session of their
+own, and the URL is a bearer credential until it expires — keep the expiry short
+(the `storage` default is 1 hour) and never log it.
 
 ### Processing status (future)
 
@@ -198,7 +227,9 @@ sequenceDiagram
 | `CreateMediaObject(ctx, mediaID, mime, ext, size?)` | Create a `pending` object; return a presigned upload URL + the object. |
 | `ActivateMediaObject(ctx, objectID, size)` | Verify upload, overwrite size, activate, supersede prior active (locked txn). |
 | `HardDeleteMediaObject(ctx, objectID)` | Remove from storage, delete the row, write a deletion-trail entry. |
-| `GetActiveURL(ctx, mediaID)` | Fully-built read URL for the active object. |
+| `GetActiveURL(ctx, mediaID)` | Fully-built read URL for the active object; the caller supplies the JWT. |
+| `ResolveActiveURLs(ctx, mediaIDs)` | Batched type + active read URL for many media in one query. |
+| `GetActiveSignedURL(ctx, mediaID)` | Signed read URL for the active object — no header needed, supports range requests, no transform. |
 | `GetDeletionsSince(ctx, since)` | Deletion-trail entries newer than `since`. |
 | `GetMedia(ctx, id)` | Fetch a media by id (nil when not found). |
 

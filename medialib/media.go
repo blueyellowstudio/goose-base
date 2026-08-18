@@ -329,6 +329,56 @@ func (s *Service) GetActiveURL(ctx context.Context, mediaID uuid.UUID) (string, 
 	return s.urls.BuildURL(media.Type, s.objectPath(media, obj)), nil
 }
 
+// SignedMedia is a media's asset type paired with a time-limited read URL that
+// carries its own credential, plus the moment that credential stops working.
+type SignedMedia struct {
+	Type      string    `json:"type"`
+	URL       string    `json:"url"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+// GetActiveSignedURL returns a signed read URL for the active object of a media —
+// one that needs no Authorization header and is therefore usable directly as an
+// <img>/<video> src.
+//
+// This exists for browser clients that hold their session in an HttpOnly cookie
+// and so cannot attach a JWT: Supabase's storage API reads the bearer token from
+// the Authorization header only, never from a cookie, so the /authenticated/ URLs
+// from GetActiveURL are unreachable from such a client. Unlike those, a signed URL
+// also supports range requests, which is what makes video seeking work.
+//
+// Signing uses the service role, which bypasses RLS — but it grants exactly what
+// the bucket's authenticated-read policy already grants every logged-in user, so it
+// escalates nothing. Callers are still expected to have established a session; the
+// URL is a bearer credential and lands in browser history, so keep the expiry
+// short and never log it.
+func (s *Service) GetActiveSignedURL(ctx context.Context, mediaID uuid.UUID) (SignedMedia, error) {
+	media, err := s.media.GetByID(ctx, mediaID)
+	if err != nil {
+		return SignedMedia{}, fmt.Errorf("get active signed url: %w", err)
+	}
+	if media == nil {
+		return SignedMedia{}, ErrMediaNotFound
+	}
+
+	obj, err := s.objects.GetActiveByMediaID(ctx, mediaID)
+	if err != nil {
+		return SignedMedia{}, fmt.Errorf("get active signed url: %w", err)
+	}
+	if obj == nil {
+		return SignedMedia{}, ErrNoActiveObject
+	}
+
+	// objectPath is the same builder GetActiveURL and ResolveActiveURLs use, so the
+	// signed path cannot drift from the path the object was uploaded to.
+	info, err := s.store.GenerateDownloadURL(s.bucket, s.objectPath(media, obj), "", false)
+	if err != nil {
+		return SignedMedia{}, fmt.Errorf("get active signed url: %w", err)
+	}
+
+	return SignedMedia{Type: media.Type, URL: info.URL, ExpiresAt: info.ExpiresAt}, nil
+}
+
 // ResolvedMedia is the read-side view of a media: its asset type and active
 // read URL. HasActive is false when no object is active yet (URL is then empty).
 type ResolvedMedia struct {

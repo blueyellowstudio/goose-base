@@ -2,6 +2,8 @@
 
 These three packages work together to handle the full lifecycle of user identity in a service: who a user is (`identityManager`), whether they are allowed in (`authorization`), and what actions they can perform after logging in (`authentication`).
 
+The design goal of the `authentication` package is that **a browser client never holds a token in JavaScript**. Every handler that produces a session writes it into `HttpOnly` cookies instead of returning tokens in a response body. Native clients that can keep a token safely are unaffected — `authorization` still reads the `Authorization` header, and prefers it over the cookie.
+
 ---
 
 ## identityManager
@@ -14,6 +16,7 @@ The `IdentityManager` interface covers:
 - **Register** — sign up a new user with email + password
 - **Authenticate** — exchange credentials for access + refresh tokens
 - **RefreshToken** — get a new access token from a refresh token
+- **ExchangeOAuthCode** — complete a PKCE authorization: trade an authorization code plus its verifier for a session (see [OAuth](#oauth-pkce-flow))
 - **VerifyEmailOtp / VerifyTokenHash** — confirm email addresses or auth links (invite, magic link, recovery, signup)
 - **SendMagicLink / SendPasswordResetEmail / ResendVerificationEmail** — trigger email flows
 - **SendInvite** — invite a user by email (admin-initiated)
@@ -24,8 +27,25 @@ The `IdentityManager` interface covers:
 - **DeleteUser** — permanently remove the user from the identity provider
 
 The `SupabaseIdentityManager` implementation uses two key types:
-- **Anon key** for public-facing operations (login, register, token refresh, OTP verification, password reset)
+- **Anon key** for public-facing operations (login, register, token refresh, OTP verification, password reset, OAuth code exchange)
 - **Service role key** for privileged admin operations (create, invite, disable, delete, get email)
+
+### OTP types
+
+`VerifyEmailOtp` takes an `EmailOtpType`. Picking the wrong one fails at runtime with an opaque "invalid or expired OTP", so the distinction matters:
+
+| Constant | Value | Verifies |
+|---|---|---|
+| `EmailOtpTypeSignup` | `signup` | the code from a registration confirmation email |
+| `EmailOtpTypeRecovery` | `recovery` | a password-recovery link |
+| `EmailOtpTypeMagicLink` | `magiclink` | a magic **link**'s `token_hash` |
+| `EmailOtpTypeEmail` | `email` | the numeric **code** from a passwordless sign-in |
+| `EmailOtpTypeInvite` | `invite` | an invitation link |
+| `EmailOtpTypeEmailChange` | `email_change` | an email-change confirmation |
+
+`EmailOtpTypeMagicLink` and `EmailOtpTypeEmail` both belong to the passwordless flow but are **not** interchangeable: the link carries a `token_hash`, the email body's `{{ .Token }}` carries a numeric code.
+
+> **`SendMagicLink` does not create users.** It posts to `/auth/v1/otp` with `create_user=false`, not the deprecated `/auth/v1/magiclink`, which creates a user for any address handed to it. That endpoint is normally reached from a public login form, where auto-creation turns the form into an unauthenticated account-creation and email-enumeration surface.
 
 ---
 
@@ -38,12 +58,24 @@ The `SupabaseIdentityManager` implementation uses two key types:
 **How it works**
 
 1. The `Handler` middleware runs on every protected route.
-2. It extracts a token from the `Authorization: Bearer` header or a named cookie.
-3. It validates the JWT signature (HS256) with the configured secret.
+2. It extracts a token from the `Authorization: Bearer` header **or**, failing that, a named cookie. The header is checked first, so a native client sending a header and a browser sending a cookie can be served by the same routes.
+3. It validates the JWT signature — see [signing algorithms](#signing-algorithms) below.
 4. It delegates further claim validation and context population to the `TokenHandler`.
 5. In non-production environments, if the `AuthorizationOverwrite` header is present with a UUID, it bypasses token validation entirely — useful for local development.
 
-**`TokenHandler` interface**
+### Signing algorithms
+
+Which algorithms are accepted follows from what you configure, and nothing else:
+
+| Configuration | Accepted |
+|---|---|
+| `NewAuthorization` (secret only) | `HS256` |
+| `NewAuthorizationWithJWKS` (secret + JWKS URL) | `HS256` and `ES256` |
+| `NewAuthorizationWithJWKS` with an **empty** secret | `ES256` only |
+
+That last row is how you retire a symmetric secret: keep both during the migration, then drop the secret from the environment. **An empty secret and an empty JWKS URL accepts nothing** and every request fails authorization with no useful explanation — guard against it at startup.
+
+### `TokenHandler` interface
 
 The `TokenHandler` is the seam between generic JWT validation and your application's domain. You implement it once per service and inject it. It has four methods:
 
@@ -54,7 +86,26 @@ The `TokenHandler` is the seam between generic JWT validation and your applicati
 | `ValidateToken` | Checks audience, expiry, and required claims |
 | `GetIdentityFromContext` | Reads the stored context entry and returns a `ContextIdentity` |
 
-`ContextIdentity` is the transport-safe struct (just `UserID uuid.UUID` and `UserEmail string`) used by any code that needs to know who the caller is.
+`ContextIdentity` is the transport-safe struct used by any code that needs to know who the caller is:
+
+```go
+type ContextIdentity struct {
+    UserID    uuid.UUID
+    UserEmail string
+    Username  string
+    Role      string
+}
+```
+
+`Username` and `Role` exist so a service can answer "who am I" from **verified** claims. A browser holding an `HttpOnly` cookie cannot read its own token, and a browser that *can* read its token must not be trusted to decode a role out of it — that is a client deciding its own permissions.
+
+### `IdentityFromRequest`
+
+```go
+func (a *Authorization) IdentityFromRequest(r *http.Request) (ContextIdentity, bool)
+```
+
+The same extract-and-validate path as `Handler`, but it **reports** the result instead of rejecting the request, and logs nothing. It exists for public endpoints that need to know whether a caller is signed in without treating "signed out" as an error — `SessionHandler` is the built-in user.
 
 ---
 
@@ -64,23 +115,75 @@ The `TokenHandler` is the seam between generic JWT validation and your applicati
 
 `authentication` builds HTTP handlers on top of the two layers above. It handles the session lifecycle from the user's perspective: cookies in, cookies out.
 
-It holds a reference to both an `IdentityManager` (for actual auth operations) and a `TokenHandler` (for reading identity from context in protected handlers).
+It holds a reference to an `IdentityManager` (for auth operations), a `TokenHandler` (for reading identity from context in protected handlers), and an `*authorization.Authorization` (for the public handlers that must validate a token themselves).
 
 **HTTP handlers**
 
-| Handler | Route intent |
-|---|---|
-| `LoginHandler` | POST — authenticate with email + password, set auth cookies |
-| `RefreshAuthHandler` | POST — refresh access token from body or cookie, update cookies |
-| `LogoutHandler` | any — clear auth cookies |
-| `AuthLinkHandler` | GET — handle email link callbacks (invite, magic link, recovery, signup), set auth cookies and redirect |
-| `RequestPasswordResetHandler` | POST — send a password reset email (always responds 200 to avoid enumeration) |
-| `ResetPasswordHandler` | POST — set a new password using identity from context (called after recovery link) |
-| `ChangePasswordHandler` | POST — verify current password then set a new one |
-| `DisableAccountHandler` | POST — disable the calling user's account and clear cookies |
-| `DeleteAccountHandler` | POST — delete the calling user's account and clear cookies |
+| Handler | Route intent | Sets session cookies |
+|---|---|---|
+| `LoginHandler` | POST — authenticate with email + password | ✅ |
+| `RegisterHandler` | POST — sign up with email + password | ❌ — see note below |
+| `RefreshAuthHandler` | POST — refresh access token from body or cookie | ✅ |
+| `LogoutHandler` | any — clear auth cookies | clears |
+| `SessionHandler` | GET — report the session carried by the request | ❌ |
+| `StartLoginHandler` | POST — email a passwordless sign-in to an existing user | ❌ |
+| `GetVerifyTokenHandler(otpType)` | POST — verify an emailed OTP of the given type | ✅ |
+| `AuthLinkHandler` | GET — handle email link callbacks (invite, magic link, recovery, signup), then redirect | ✅ |
+| `OAuthStartHandler` | GET — begin a server-side PKCE authorization | ❌ (sets PKCE cookies) |
+| `OAuthCallbackHandler` | GET — exchange the authorization code, then redirect | ✅ |
+| `ResendVerificationEmailHandler` | POST — resend a confirmation email | ❌ |
+| `RequestPasswordResetHandler` | POST — send a password reset email (always 200, to avoid enumeration) | ❌ |
+| `ResetPasswordHandler` | POST — set a new password using identity from context | ❌ |
+| `ChangePasswordHandler` | POST — verify current password then set a new one | ❌ |
+| `DisableAccountHandler` | POST — disable the calling user's account | clears |
+| `DeleteAccountHandler` | POST — delete the calling user's account | clears |
 
-Cookies are set as `HttpOnly`, `Secure` in production (`SameSite=Strict`), and `SameSite=Lax` in development. Both the access token cookie and the refresh token cookie are managed together with a 7-day max age.
+`GetVerifyTokenHandler` is a **factory**, not a handler: it returns an `http.HandlerFunc` bound to one `EmailOtpType`, so mount one route per type you support.
+
+> **`RegisterHandler` deliberately sets no cookie.** With email confirmation enabled there is no session to store yet; `GetVerifyTokenHandler(EmailOtpTypeSignup)` establishes it once the address is confirmed. It also answers a duplicate email with the **same** response as a successful signup — a distinguishable response would enumerate registered addresses to an anonymous caller.
+
+**Which handlers need the authorization middleware**
+
+`ResetPasswordHandler`, `ChangePasswordHandler`, `DisableAccountHandler` and `DeleteAccountHandler` all open with `GetIdentityFromContext`. Mounted on a public router they return `401` unconditionally — the context is never populated. Everything else in the table is public by design and carries its own credential in the request.
+
+### Cookies
+
+Two cookies are managed together, both `HttpOnly`, `Secure` in production, `SameSite=Strict` in production and `Lax` in development, with a 7-day max age (`CookieMaxAge`):
+
+| Cookie | Path | Contents |
+|---|---|---|
+| access token | `/` | the JWT `authorization` validates |
+| refresh token | `refreshPath`, default `/` | the token `RefreshAuthHandler` spends |
+
+`SetRefreshPath` scopes the refresh cookie to the single endpoint that can consume it, so it stops riding along on every other request:
+
+```go
+authn.SetRefreshPath("/do-auth/refresh")
+```
+
+The path must equal the route you mount `RefreshAuthHandler` on. `clearAuthCookie` reads the same field, so logout keeps matching automatically — but a stale hardcoded path elsewhere leaves a cookie logout cannot delete.
+
+> **`SameSite=Strict` requires the browser and the API to be same-site.** If the SPA is served from a different registrable domain than the API, no authenticated request carries its cookie at all, and the failure is silent.
+
+### OAuth (PKCE flow)
+
+`OAuthStartHandler` and `OAuthCallbackHandler` implement the confidential-client flow, so no provider token ever reaches JavaScript:
+
+```
+GET  /do-auth/oauth/{provider}         → 302 to Supabase /auth/v1/authorize (code_challenge)
+     ↑ generates a PKCE verifier + CSRF state, parks both in short-lived cookies
+
+     … provider consent, Supabase mints the session …
+
+GET  /do-auth/oauth/callback?code=…    → exchanges the code server-side → sets session cookies → 302 to appUrl
+```
+
+Details worth knowing before mounting these:
+
+- **`{provider}` is read with `r.PathValue`**, which both `net/http`'s `ServeMux` and chi populate, so the package takes no router dependency. Providers are checked against an allow-list (`OAuthProviderGoogle`, `OAuthProviderApple`); an unchecked provider string interpolated into the authorize URL would be an open redirect.
+- **The CSRF `state` travels in `redirect_to`**, not as an `authorize` parameter — Supabase does not round-trip a caller-supplied state, it mints its own for the provider handshake. Your **redirect allow-list entry must therefore tolerate a query string**, e.g. `https://api.example.com/do-auth/oauth/callback*`.
+- **The PKCE cookies are `SameSite=Lax` in every environment**, unlike the session cookies. The callback is a cross-site top-level navigation, and `Strict` cookies are not sent on it — every sign-in would fail the state check.
+- Every failure redirects to `LoginRedirectConfig.LoginErrorPath` with one generic message; the provider's own error is logged, never rendered.
 
 ---
 
@@ -90,52 +193,110 @@ Cookies are set as `HttpOnly`, `Secure` in production (`SameSite=Strict`), and `
 
 ```go
 // your service's authorization package — implements TokenHandler for your domain
-tokenHandler := authorization.NewTokenHandler()
+tokenHandler := myauth.NewTokenHandler()
 
-identityManager := identityManager.NewSupabaseIdentityManager(
-    "https://xyzproject.supabase.co",
-    "eyJ...service-role-key...",
-    "eyJ...anon-key...",
+identities := identityManager.NewSupabaseIdentityManager(
+    os.Getenv("SUPABASE_URL"),
+    os.Getenv("SUPABASE_ANON_KEY"),
+    os.Getenv("SUPABASE_SERVICE_ROLE_KEY"),
 )
 
-authz := authorization.NewAuthorization(
-    "auth_token",         // tokenCookieName — name of the access token cookie
-    []byte("my-jwt-secret"),
+// ES256 via JWKS, with HS256 still accepted while a legacy secret is configured.
+// Pass an empty jwtSecret to accept ES256 only.
+authz, err := authorization.NewAuthorizationWithJWKS(
+    ctx,
+    "token",                    // tokenCookieName — name of the access token cookie
+    os.Getenv("JWT_SECRET"),    // legacy HS256 secret; "" disables HS256
+    os.Getenv("JWKS_URL"),      // https://<project>.supabase.co/auth/v1/.well-known/jwks.json
     tokenHandler,
-    true,                 // isProduction
+    isProduction,
 )
+if err != nil {
+    return fmt.Errorf("build authorization: %w", err)
+}
 
 authn := authentication.NewAuthentication(
-    identityManager,
+    identities,
     tokenHandler,
-    "https://myapp.com",  // appUrl — used for redirect targets in link flows
-    "auth_token",         // tokenCookieName
-    "refresh_token",      // refreshTokenCookieName
-    true,                 // isProduction
+    authz,                      // needed by public handlers that validate the token themselves
+    os.Getenv("APP_URL"),       // appUrl — the FRONTEND origin; redirect paths are appended to it
+    "token",                    // tokenCookieName
+    "rToken",                   // refreshTokenCookieName
+    isProduction,
+    authentication.LoginRedirectConfig{
+        RedirectToTokenLoginAfterMagicLinkFailed: true,
+        TokenLoginPath:   "/token-login",        // all four are FRONTEND routes
+        LoginErrorPath:   "/",
+        AcceptInvitePath: "/register",
+        SetPasswordPath:  "/reset-password/new",
+    },
+    authentication.OAuthConfig{
+        SupabaseURL: os.Getenv("SUPABASE_URL"),
+        CallbackURL: os.Getenv("API_BASE_URL") + "/do-auth/oauth/callback",
+        // CookiePath defaults to "/do-auth/oauth"; it must prefix the callback path
+    },
 )
+
+// Keep the refresh cookie off every other request.
+authn.SetRefreshPath("/do-auth/refresh")
 ```
+
+> Pass the zero `OAuthConfig` when you do not mount the OAuth routes. `OAuthStartHandler` then refuses and redirects to the error path rather than building a half-formed authorize URL.
 
 ### Wiring routes
 
+Note the two groups: public handlers carry their own credential, authenticated ones read the caller from context.
+
 ```go
-mux := http.NewServeMux()
+r := chi.NewRouter()
 
-// Public auth routes
-mux.HandleFunc("/auth/login", authn.LoginHandler)
-mux.HandleFunc("/auth/refresh", authn.RefreshAuthHandler)
-mux.HandleFunc("/auth/logout", authn.LogoutHandler)
-mux.HandleFunc("/auth/link", authn.AuthLinkHandler)
-mux.HandleFunc("/auth/password/request-reset", authn.RequestPasswordResetHandler)
+// Public — credential arrives in the body, a cookie, or a query parameter
+r.Post("/do-auth/login", authn.LoginHandler)
+r.Post("/do-auth/register", authn.RegisterHandler)
+r.Post("/do-auth/refresh", authn.RefreshAuthHandler)      // must equal SetRefreshPath
+r.Post("/do-auth/logout", authn.LogoutHandler)
+r.Get("/do-auth/session", authn.SessionHandler)
 
-// Protected routes — every request passes through the authorization middleware
-protected := http.NewServeMux()
-protected.HandleFunc("/auth/password/reset", authn.ResetPasswordHandler)
-protected.HandleFunc("/auth/password/change", authn.ChangePasswordHandler)
-protected.HandleFunc("/auth/account/disable", authn.DisableAccountHandler)
-protected.HandleFunc("/auth/account/delete", authn.DeleteAccountHandler)
-protected.HandleFunc("/api/orders", ordersHandler)
+// Passwordless: the email carries both a link and a numeric code
+r.Post("/do-auth/token-login", authn.StartLoginHandler)
+r.Get("/do-auth/link", authn.AuthLinkHandler)
+r.Post("/do-auth/verify-otp", authn.GetVerifyTokenHandler(identityManager.EmailOtpTypeEmail))
 
-mux.Handle("/", authz.Handler(protected))
+// Email confirmation after registration
+r.Post("/do-auth/verify-email", authn.GetVerifyTokenHandler(identityManager.EmailOtpTypeSignup))
+r.Post("/do-auth/resend-verification", authn.ResendVerificationEmailHandler)
+
+r.Post("/do-auth/password/request-reset", authn.RequestPasswordResetHandler)
+
+// chi matches the static "callback" segment before the {provider} wildcard
+r.Get("/do-auth/oauth/callback", authn.OAuthCallbackHandler)
+r.Get("/do-auth/oauth/{provider}", authn.OAuthStartHandler)
+
+// Authenticated — these read identity from context and 401 without the middleware
+r.Group(func(protected chi.Router) {
+    protected.Use(authz.Handler)
+
+    protected.Post("/do-auth/password/reset", authn.ResetPasswordHandler)
+    protected.Post("/do-auth/password/change", authn.ChangePasswordHandler)
+    protected.Post("/do-auth/account/disable", authn.DisableAccountHandler)
+    protected.Post("/do-auth/account/delete", authn.DeleteAccountHandler)
+})
+
+// Your application routes
+r.Route("/api", func(api chi.Router) {
+    api.Use(authz.Handler)
+    api.Get("/orders", ordersHandler)
+})
+```
+
+`SessionHandler` is deliberately **not** behind `authz.Handler`. Being signed out is a normal state for a visitor, so it answers `200` with `{"authenticated": false}` rather than `401`; mounted behind the middleware, every anonymous page load would also emit an error log.
+
+```jsonc
+// GET /do-auth/session — signed out
+{ "authenticated": false }
+
+// GET /do-auth/session — signed in
+{ "authenticated": true, "userId": "…", "email": "…", "username": "…", "role": "admin" }
 ```
 
 ### Implementing TokenHandler
@@ -143,7 +304,7 @@ mux.Handle("/", authz.Handler(protected))
 This is the only piece you write yourself per service. It translates raw JWT claims into your domain's user struct and stores it in context. The example below is a Supabase-flavoured implementation.
 
 ```go
-package authorization
+package myauth
 
 import (
     "context"
@@ -183,6 +344,7 @@ func (h *supabaseTokenHandler) CreateContext(ctx context.Context, claims jwt.Map
         UserID:   userID,
         Username: extractUserName(claims),
         Email:    extractStringClaim(claims, "email"),
+        Role:     extractRole(claims),
     }
 
     return WithUser(ctx, userClaims), nil
@@ -216,6 +378,9 @@ func (h *supabaseTokenHandler) ValidateToken(claims jwt.MapClaims) error {
 }
 
 // GetIdentityFromContext maps stored context claims into a transport-safe context identity object.
+//
+// Fill Username and Role: SessionHandler reports them to the client, and a client
+// that cannot read its own cookie has no other way to learn its role.
 func (h *supabaseTokenHandler) GetIdentityFromContext(ctx context.Context) (authorization.ContextIdentity, error) {
     claims := GetUserClaims(ctx)
     if claims == nil {
@@ -229,7 +394,14 @@ func (h *supabaseTokenHandler) GetIdentityFromContext(ctx context.Context) (auth
     return authorization.ContextIdentity{
         UserID:    claims.UserID,
         UserEmail: claims.Email,
+        Username:  claims.Username,
+        Role:      string(claims.Role),
     }, nil
+}
+
+func extractRole(claims jwt.MapClaims) string {
+    role, _ := claims["user_role"].(string)
+    return role
 }
 
 func extractUserName(claims jwt.MapClaims) string {
@@ -276,11 +448,12 @@ Once the authorization middleware has run, any downstream handler can read the c
 func ordersHandler(w http.ResponseWriter, r *http.Request) {
     identity, err := tokenHandler.GetIdentityFromContext(r.Context())
     if err != nil {
+        slog.Error("orders rejected", "status", http.StatusUnauthorized, "path", r.URL.Path, "err", err)
         http.Error(w, "unauthorized", http.StatusUnauthorized)
         return
     }
 
-    // identity.UserID and identity.UserEmail are now available
+    // identity.UserID, .UserEmail, .Username and .Role are now available
     orders, err := store.GetOrdersForUser(r.Context(), identity.UserID)
     // ...
 }
@@ -294,11 +467,19 @@ Client request
     ▼
 authz.Handler (middleware)
     ├── non-production + AuthorizationOverwrite header → CreateDebugContext → context populated
-    ├── Bearer header or cookie → validateToken (HS256 + TokenHandler.ValidateToken)
-    │       └── TokenHandler.CreateContext → context populated
+    ├── Authorization: Bearer header, else the named cookie
+    │       └── validateToken (HS256 and/or ES256 via JWKS, then TokenHandler.ValidateToken)
+    │               └── TokenHandler.CreateContext → context populated
     └── no token / invalid → 401 Unauthorized
     │
     ▼
 Your handler
-    └── tokenHandler.GetIdentityFromContext(ctx) → ContextIdentity{UserID, UserEmail}
+    └── tokenHandler.GetIdentityFromContext(ctx) → ContextIdentity{UserID, UserEmail, Username, Role}
+```
+
+Public endpoints take the same path without the rejection:
+
+```
+GET /do-auth/session
+    └── authz.IdentityFromRequest(r) → (ContextIdentity, ok) → 200 either way, never logs
 ```

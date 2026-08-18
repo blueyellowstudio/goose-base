@@ -23,9 +23,23 @@ those links live on app-side tables (e.g. an `exercise_media` table).
 ## Access model
 
 - **Semi-public** is a coarse gate ("is this a valid logged-in session"), not
-  per-file ownership. Reads need **no library-side signing** — they are gated by
-  Supabase **RLS** (an authenticated-read policy on the bucket).
-- The library issues presigned URLs only for **uploads**. Uploads, HEAD checks
+  per-file ownership. Reads are gated by Supabase **RLS** (an authenticated-read
+  policy on the bucket).
+- Reads come in two shapes, differing only in *where the credential lives*:
+  - `GetActiveURL` / `ResolveActiveURLs` → an `…/authenticated/…` URL. The
+    **caller** attaches the Supabase JWT as an `Authorization` header. Supports
+    on-the-fly image resizing.
+  - `GetActiveSignedURL` → a signed URL carrying its own short-lived token in the
+    query string. For clients that **cannot** set that header — a browser holding
+    its session in an HttpOnly cookie, since Supabase's storage API reads the
+    bearer token from the `Authorization` header only and never from a cookie.
+    Usable directly as an `<img>`/`<video>` src, and supports **range requests**,
+    so video seeking works. No image transform: Supabase applies transforms at
+    signing time and this does not pass one, so you get the original.
+- Signing uses the **service role key**, which bypasses RLS. Not an escalation
+  here — it grants exactly what the authenticated-read policy already grants every
+  logged-in user. Callers are still expected to have a session of their own.
+- Writes are never client-credentialed. Uploads (presigned), HEAD checks
   (`FileExists` / `GetObjectInfo`) and deletes are performed by the backend using the
   Supabase **service role key**, which **bypasses RLS**.
 
