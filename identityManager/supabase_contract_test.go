@@ -13,16 +13,16 @@ import (
 )
 
 type contractBackend struct {
-	name                 string
-	newManager           func(t *testing.T) IdentityManager
-	validAuthEmail       string
-	validAuthPassword    string
+	name                   string
+	newManager             func(t *testing.T) IdentityManager
+	validAuthEmail         string
+	validAuthPassword      string
 	supportsSuccessfulAuth bool
 	// validOAuthCode and validOAuthVerifier are only meaningful when the backend can be
 	// driven through a successful PKCE exchange, which a live Supabase project cannot be
 	// from a test.
-	validOAuthCode     string
-	validOAuthVerifier string
+	validOAuthCode        string
+	validOAuthVerifier    string
 	supportsOAuthExchange bool
 }
 
@@ -88,12 +88,12 @@ func newMockContractBackend() contractBackend {
 			t.Cleanup(ts.Close)
 			return NewSupabaseIdentityManager(ts.URL, "service-key", "anon-key")
 		},
-		validAuthEmail:       "valid@example.com",
-		validAuthPassword:    "Password1",
+		validAuthEmail:         "valid@example.com",
+		validAuthPassword:      "Password1",
 		supportsSuccessfulAuth: true,
-		validOAuthCode:        "valid-auth-code",
-		validOAuthVerifier:    "valid-verifier",
-		supportsOAuthExchange: true,
+		validOAuthCode:         "valid-auth-code",
+		validOAuthVerifier:     "valid-verifier",
+		supportsOAuthExchange:  true,
 	}
 }
 
@@ -116,8 +116,8 @@ func newIntegrationContractBackend(t *testing.T) contractBackend {
 			t.Helper()
 			return NewSupabaseIdentityManager(url, serviceKey, anonKey)
 		},
-		validAuthEmail:       email,
-		validAuthPassword:    password,
+		validAuthEmail:         email,
+		validAuthPassword:      password,
 		supportsSuccessfulAuth: email != "" && password != "",
 	}
 }
