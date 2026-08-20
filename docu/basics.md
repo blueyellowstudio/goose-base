@@ -22,9 +22,15 @@ The `IdentityManager` interface covers:
 - **SendInvite** — invite a user by email (admin-initiated)
 - **CreateManagedUser** — create a user on behalf of an admin, skipping email confirmation
 - **GetUserEmail** — look up a user's email by UUID
+- **GetUserIdByEmail** — the reverse lookup, or `ErrUserNotFound`. Signup returns no id for an address that already exists, so this is how a caller recovers one (see [the register hook](#post-registration-hook))
 - **UpdateUserPassword** — set a new password for a given user UUID
 - **DisableUser** — ban the user for ~100 years
 - **DeleteUser** — permanently remove the user from the identity provider
+
+> **`GetUserIdByEmail` goes through GoTrue's admin *list* endpoint**, because there is no get-by-email. Two properties of that endpoint, both verified against a live project, are why the implementation looks the way it does — leave both alone:
+>
+> - **The query parameter is `filter`.** An unrecognised one such as `email` is not rejected, it is silently ignored, and the endpoint then answers with page one of *every* user in the project. Asking for an address that did not exist came back with three unrelated accounts.
+> - **The filter matches loosely**, so every candidate's address is compared exactly before its id is returned. Callers use that id to decide which account they act on; a loose match hands them a stranger's.
 
 The `SupabaseIdentityManager` implementation uses two key types:
 - **Anon key** for public-facing operations (login, register, token refresh, OTP verification, password reset, OAuth code exchange)
@@ -107,6 +113,30 @@ func (a *Authorization) IdentityFromRequest(r *http.Request) (ContextIdentity, b
 
 The same extract-and-validate path as `Handler`, but it **reports** the result instead of rejecting the request, and logs nothing. It exists for public endpoints that need to know whether a caller is signed in without treating "signed out" as an error — `SessionHandler` is the built-in user.
 
+### `ContextFromRequest`
+
+```go
+func (a *Authorization) ContextFromRequest(r *http.Request) (context.Context, error)
+```
+
+The layer underneath both of the above: it resolves the caller and returns a context carrying whatever `TokenHandler.CreateContext` produced. It never logs and never writes a response, and on failure returns the request's own context unchanged alongside the error.
+
+`Handler` is the rejecting wrapper around it, `IdentityFromRequest` the reporting one. Reach for `ContextFromRequest` when neither fits and you need your own policy — optional authentication, a custom `401` body, redirect-instead-of-reject:
+
+```go
+// Populate the context when a token is present, pass anonymous requests through.
+func (a *Auth) HandleUserMaybe(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ctx, err := a.authz.ContextFromRequest(r); err == nil {
+			r = r.WithContext(ctx)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+```
+
+> **Prefer this over rebuilding your claims from a `ContextIdentity`.** The context it returns is exactly the one `Handler` produces, so a token-derived field added to your claims later reaches both paths. Reconstructing from `ContextIdentity` silently drops anything that struct does not carry, and the optional-auth path is precisely where nobody notices.
+
 ---
 
 ## authentication
@@ -141,6 +171,45 @@ It holds a reference to an `IdentityManager` (for auth operations), a `TokenHand
 `GetVerifyTokenHandler` is a **factory**, not a handler: it returns an `http.HandlerFunc` bound to one `EmailOtpType`, so mount one route per type you support.
 
 > **`RegisterHandler` deliberately sets no cookie.** With email confirmation enabled there is no session to store yet; `GetVerifyTokenHandler(EmailOtpTypeSignup)` establishes it once the address is confirmed. It also answers a duplicate email with the **same** response as a successful signup — a distinguishable response would enumerate registered addresses to an anonymous caller.
+
+### Post-registration hook
+
+`RegisterHandler` owns the signup, but only your service knows what a new user means in its own tables. `SetOnRegistered` is the seam:
+
+```go
+type RegisterHook func(ctx context.Context, userID uuid.UUID, req RegisterRequest) error
+
+authn.SetOnRegistered(func(ctx context.Context, userID uuid.UUID, req authentication.RegisterRequest) error {
+    // MUST be idempotent — see below.
+    return users.EnsureRow(ctx, userID, req.Username, req.FirstName, req.LastName)
+})
+```
+
+**The hook must be idempotent.** It fires in *both* branches: for an account this request created, and for an address that already existed, whose id is recovered with `GetUserIdByEmail`. That is deliberate — it makes self-healing the same code path rather than a second one. An idempotent hook writes the row the first time and repairs a missing one on any later signup attempt, which matters because the branch that would otherwise strand a user has no id to work with.
+
+**A failing hook fails the request with a 500**, in both branches. Where they differ is cleanup:
+
+| | hook succeeds | hook fails |
+|---|---|---|
+| account created by this request | 201 | 500, **and the new user is deleted again** |
+| address already existed | 201 | 500, the account is left alone |
+| address already existed, lookup failed | 201, hook not called | — |
+
+> **The compensating delete must never fire for an account this request did not create.** Otherwise a failing hook plus a signup for an address you do not own becomes a way to delete somebody else's account. `RegisterHandler` tracks this explicitly rather than inferring it.
+
+Without a hook installed, `RegisterHandler` behaves exactly as it did before hooks existed — no id is parsed and no lookup is issued.
+
+### Handlers a service can build on
+
+Three helpers are exported for services that keep a handler of their own, typically because it also writes application tables — an accept-invite or delete-account flow:
+
+| Export | Use |
+|---|---|
+| `SetAuthCookie(w, *identityManager.AuthResponse)` | establish a session |
+| `ClearAuthCookie(w)` | drop one |
+| `IsPasswordAcceptable(password) bool` | the package's password rule: ≥8 characters with lower, upper and a digit |
+
+> **The cookie methods are a pair.** A browser only drops a cookie when the expiring `Set-Cookie` repeats the same name, path, `Secure` and `SameSite`. Hand-roll the clearing half and you leave a session cookie that logout cannot delete. Use `IsPasswordAcceptable` for the same reason in a different key: a service that invents its own check somewhere gets a path that stays weak long after the others were tightened.
 
 **Which handlers need the authorization middleware**
 
