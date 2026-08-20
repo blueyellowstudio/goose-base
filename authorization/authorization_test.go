@@ -190,3 +190,40 @@ func TestHandler_PassesThroughWithValidJWT(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusNoContent, rr.Code)
 	}
 }
+
+func TestContextFromRequest_ReturnsPopulatedContext(t *testing.T) {
+	type ctxKey string
+	const key ctxKey = "authorized"
+
+	h := &mockTokenHandler{
+		createContext: func(ctx context.Context, claims jwt.MapClaims) (context.Context, error) {
+			return context.WithValue(ctx, key, true), nil
+		},
+	}
+	a := Authorization{TokenHandler: h, jwtSecret: []byte("secret")}
+
+	tokenString := signedToken(t, jwt.SigningMethodHS256, []byte("secret"), jwt.MapClaims{"sub": "u1"})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenString)
+
+	ctx, err := a.ContextFromRequest(req)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if ok, _ := ctx.Value(key).(bool); !ok {
+		t.Fatal("expected the TokenHandler's context value to be present")
+	}
+}
+
+func TestContextFromRequest_ReportsFailureWithoutTouchingTheContext(t *testing.T) {
+	a := Authorization{TokenHandler: &mockTokenHandler{}}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	ctx, err := a.ContextFromRequest(req)
+	if err == nil {
+		t.Fatal("expected an error for a request carrying no token")
+	}
+	if ctx != req.Context() {
+		t.Fatal("expected the request's own context back on failure")
+	}
+}

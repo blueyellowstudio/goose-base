@@ -27,7 +27,7 @@ func (a *Authorization) Handler(next http.Handler) http.Handler {
 }
 
 func (a *Authorization) getContextWithUser(r *http.Request) (context.Context, bool) {
-	ctx, err := a.contextFromRequest(r)
+	ctx, err := a.ContextFromRequest(r)
 	if err != nil {
 		slog.Error("Authorization failed", "status", http.StatusUnauthorized, "path", r.URL.Path, "error", err)
 		return r.Context(), false
@@ -42,7 +42,7 @@ func (a *Authorization) getContextWithUser(r *http.Request) (context.Context, bo
 // reported as (zero identity, false) and is neither logged nor written to the
 // response, because for a logged-out visitor it is a normal state and not an error.
 func (a *Authorization) IdentityFromRequest(r *http.Request) (ContextIdentity, bool) {
-	ctx, err := a.contextFromRequest(r)
+	ctx, err := a.ContextFromRequest(r)
 	if err != nil {
 		return ContextIdentity{}, false
 	}
@@ -55,10 +55,18 @@ func (a *Authorization) IdentityFromRequest(r *http.Request) (ContextIdentity, b
 	return identity, true
 }
 
-// contextFromRequest resolves the caller from the request and returns a context
-// carrying the identity. It never logs or writes a response — callers decide
-// whether a failure is an error worth reporting.
-func (a *Authorization) contextFromRequest(r *http.Request) (context.Context, error) {
+// ContextFromRequest resolves the caller from the request and returns a context
+// carrying the identity that TokenHandler.CreateContext produced. It never logs and
+// never writes a response — callers decide whether a failure is worth reporting. On
+// failure it returns the request's own context unchanged alongside the error.
+//
+// Handler is the rejecting wrapper around this, IdentityFromRequest the reporting one.
+// It is exported so a service can build its own policy — optional authentication, a
+// custom 401 body, redirect-instead-of-reject — without another handler in this
+// package. Prefer it over rebuilding claims from a ContextIdentity: the context here is
+// exactly the one Handler produces, so a token-derived field added later reaches both
+// paths instead of being silently dropped by one.
+func (a *Authorization) ContextFromRequest(r *http.Request) (context.Context, error) {
 	ctx := r.Context()
 
 	if !a.isProduction {
