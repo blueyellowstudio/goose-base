@@ -32,6 +32,7 @@ type mockIdentityManager struct {
 	sendInvite              func(ctx context.Context, email string, metadata map[string]interface{}) (uuid.UUID, error)
 	createManagedUser       func(ctx context.Context, email, displayName string, companyUUID uuid.UUID, username *string) (*identityManager.AdminUserResponse, error)
 	getUserEmail            func(ctx context.Context, userID uuid.UUID) (string, error)
+	getUserIdByEmail        func(ctx context.Context, email string) (uuid.UUID, error)
 	updateUserPassword      func(ctx context.Context, userID uuid.UUID, password string) error
 	disableUser             func(ctx context.Context, userID uuid.UUID) error
 	deleteUser              func(ctx context.Context, userID uuid.UUID) error
@@ -119,6 +120,13 @@ func (m *mockIdentityManager) GetUserEmail(ctx context.Context, userID uuid.UUID
 		return m.getUserEmail(ctx, userID)
 	}
 	return "user@example.com", nil
+}
+
+func (m *mockIdentityManager) GetUserIdByEmail(ctx context.Context, email string) (uuid.UUID, error) {
+	if m.getUserIdByEmail != nil {
+		return m.getUserIdByEmail(ctx, email)
+	}
+	return uuid.Nil, identityManager.ErrUserNotFound
 }
 
 func (m *mockIdentityManager) UpdateUserPassword(ctx context.Context, userID uuid.UUID, password string) error {

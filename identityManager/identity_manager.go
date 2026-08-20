@@ -2,9 +2,15 @@ package identityManager
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 )
+
+// ErrUserNotFound is what a lookup reports when the identity provider knows no user
+// matching the query. It is a normal answer, not a failure of the call — callers are
+// expected to branch on it rather than treat it as an outage.
+var ErrUserNotFound = errors.New("user not found")
 
 // EmailOtpType represents the type of OTP used in email verification.
 type EmailOtpType string
@@ -67,6 +73,10 @@ type IdentityManager interface {
 	SendInvite(ctx context.Context, email string, metadata map[string]interface{}) (uuid.UUID, error)
 	CreateManagedUser(ctx context.Context, email, displayName string, companyUUID uuid.UUID, username *string) (*AdminUserResponse, error)
 	GetUserEmail(ctx context.Context, userID uuid.UUID) (string, error)
+	// GetUserIdByEmail resolves an address to its user id, or reports ErrUserNotFound.
+	// It exists so a caller can recover the id of an account that already exists —
+	// signup returns no id for a duplicate address.
+	GetUserIdByEmail(ctx context.Context, email string) (uuid.UUID, error)
 	UpdateUserPassword(ctx context.Context, userID uuid.UUID, password string) error
 	DisableUser(ctx context.Context, userID uuid.UUID) error
 	DeleteUser(ctx context.Context, userID uuid.UUID) error

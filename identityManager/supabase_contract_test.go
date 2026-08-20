@@ -3,8 +3,10 @@ package identityManager
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -195,4 +197,102 @@ func TestSupabaseIdentityManager_Contract(t *testing.T) {
 			runIdentityManagerContractSuite(t, backend)
 		})
 	}
+}
+
+// newUsersListServer stands in for GoTrue's admin list-users endpoint, answering with
+// the supplied JSON and recording the query it was called with.
+func newUsersListServer(t *testing.T, body string, gotQuery *url.Values) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/auth/v1/admin/users" {
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+		if gotQuery != nil {
+			*gotQuery = r.URL.Query()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+}
+
+func TestGetUserIdByEmail(t *testing.T) {
+	const wantID = "7353c17e-c3d9-4baf-9b1f-9d7c97f71e93"
+
+	t.Run("returns the id for a known address", func(t *testing.T) {
+		var query url.Values
+		server := newUsersListServer(t,
+			`{"users":[{"id":"`+wantID+`","email":"known@example.com"}]}`, &query)
+		defer server.Close()
+
+		got, err := NewSupabaseIdentityManager(server.URL, "service", "anon").
+			GetUserIdByEmail(context.Background(), "known@example.com")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.String() != wantID {
+			t.Fatalf("got %s, want %s", got, wantID)
+		}
+
+		// GoTrue ignores an unrecognised "email" parameter and answers with page 1 of
+		// every user, so the parameter name is part of the contract, not a detail.
+		if query.Get("filter") != "known@example.com" {
+			t.Errorf("expected the address in filter=, got query %v", query)
+		}
+	})
+
+	t.Run("matches the address case-insensitively", func(t *testing.T) {
+		server := newUsersListServer(t,
+			`{"users":[{"id":"`+wantID+`","email":"Known@Example.com"}]}`, nil)
+		defer server.Close()
+
+		if _, err := NewSupabaseIdentityManager(server.URL, "service", "anon").
+			GetUserIdByEmail(context.Background(), "known@example.com"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("reports ErrUserNotFound for an empty result", func(t *testing.T) {
+		server := newUsersListServer(t, `{"users":[]}`, nil)
+		defer server.Close()
+
+		_, err := NewSupabaseIdentityManager(server.URL, "service", "anon").
+			GetUserIdByEmail(context.Background(), "nobody@example.com")
+		if !errors.Is(err, ErrUserNotFound) {
+			t.Fatalf("got %v, want ErrUserNotFound", err)
+		}
+	})
+
+	// The filter matches loosely and this id decides which account a caller writes
+	// against, so a non-matching result must not be trusted. Observed against a real
+	// project: an unrecognised parameter returned three unrelated accounts.
+	t.Run("rejects results whose address does not match", func(t *testing.T) {
+		server := newUsersListServer(t, `{"users":[
+			{"id":"`+wantID+`","email":"someone.else@example.com"},
+			{"id":"618837e2-46e6-4ddd-b2ca-a2fdbfeab949","email":"third.party@example.com"}
+		]}`, nil)
+		defer server.Close()
+
+		_, err := NewSupabaseIdentityManager(server.URL, "service", "anon").
+			GetUserIdByEmail(context.Background(), "known@example.com")
+		if !errors.Is(err, ErrUserNotFound) {
+			t.Fatalf("got %v, want ErrUserNotFound for a non-matching address", err)
+		}
+	})
+
+	t.Run("surfaces a non-200 as an error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"message":"invalid service key"}`))
+		}))
+		defer server.Close()
+
+		_, err := NewSupabaseIdentityManager(server.URL, "service", "anon").
+			GetUserIdByEmail(context.Background(), "known@example.com")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if errors.Is(err, ErrUserNotFound) {
+			t.Fatal("a failed call must not be reported as user-not-found")
+		}
+	})
 }

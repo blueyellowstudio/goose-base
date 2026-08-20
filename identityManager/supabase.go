@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -348,6 +350,60 @@ func (s *SupabaseIdentityManager) GetUserEmail(ctx context.Context, userID uuid.
 		return "", fmt.Errorf("supabase get user email: failed to parse response: %w", err)
 	}
 	return resp.Email, nil
+}
+
+// listUsersResponse is GoTrue's admin list-users envelope.
+type listUsersResponse struct {
+	Users []AdminUserResponse `json:"users"`
+}
+
+// GetUserIdByEmail resolves an address to its user id, or reports ErrUserNotFound.
+//
+// GoTrue exposes no get-by-email, so this goes through the admin list endpoint with a
+// filter. Two things about that endpoint decide the shape of this function:
+//
+// The parameter is "filter". An unrecognised one — "email", say — is not rejected but
+// silently ignored, and the endpoint then answers with page one of every user in the
+// project. Verified 2026-08-20 against a live project, where asking for an address that
+// did not exist came back with three unrelated accounts.
+//
+// The filter matches loosely. Callers use the returned id to decide which account they
+// act on, so a loose match must never be trusted: every candidate's address is compared
+// exactly before its id is returned. Both properties are covered by tests — do not
+// simplify either away.
+func (s *SupabaseIdentityManager) GetUserIdByEmail(ctx context.Context, email string) (uuid.UUID, error) {
+	query := url.Values{}
+	query.Set("filter", email)
+	query.Set("per_page", "10")
+
+	body, status, err := s.doServiceRequest(ctx, http.MethodGet,
+		s.supabaseURL+"/auth/v1/admin/users?"+query.Encode(),
+		nil,
+	)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("supabase get user by email: %w", err)
+	}
+	if status != http.StatusOK {
+		return uuid.Nil, parseAdminError(body, status, "supabase get user by email")
+	}
+
+	var resp listUsersResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return uuid.Nil, fmt.Errorf("supabase get user by email: failed to parse response: %w", err)
+	}
+
+	for _, user := range resp.Users {
+		if !strings.EqualFold(user.Email, email) {
+			continue
+		}
+		userID, err := uuid.Parse(user.ID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("supabase get user by email: failed to parse user ID: %w", err)
+		}
+		return userID, nil
+	}
+
+	return uuid.Nil, ErrUserNotFound
 }
 
 func (s *SupabaseIdentityManager) UpdateUserPassword(ctx context.Context, userID uuid.UUID, password string) error {
