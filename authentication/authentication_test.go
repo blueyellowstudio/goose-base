@@ -737,3 +737,175 @@ func TestIsPasswordAcceptable(t *testing.T) {
 		}
 	}
 }
+
+const registerHookBody = `{"username":"user","email":"taken@example.com","password":"StrongPass1","firstName":"Fresh"}`
+
+// duplicateSignupErr is what identityManager.Register reports for an address Supabase
+// already knows, with email confirmation enabled.
+var duplicateSignupErr = errors.New("supabase signup: no identity returned")
+
+func TestRegisterHandler_HookFiresWithNewUserIdOnFreshSignup(t *testing.T) {
+	const newUserID = "11111111-1111-1111-1111-111111111111"
+
+	var gotID uuid.UUID
+	var gotReq RegisterRequest
+	a := newTestAuthentication(&mockIdentityManager{
+		register: func(ctx context.Context, name, email, password string) (*identityManager.RegisterResponse, error) {
+			return &identityManager.RegisterResponse{UserID: newUserID}, nil
+		},
+	}, &mockAuthTokenHandler{}, true)
+	a.SetOnRegistered(func(_ context.Context, userID uuid.UUID, req RegisterRequest) error {
+		gotID, gotReq = userID, req
+		return nil
+	})
+
+	rr := postRegister(t, a, registerHookBody)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, rr.Code)
+	}
+	if gotID.String() != newUserID {
+		t.Fatalf("hook got id %s, want %s", gotID, newUserID)
+	}
+	if gotReq.FirstName != "Fresh" || gotReq.Username != "user" {
+		t.Errorf("hook lost request fields: %+v", gotReq)
+	}
+}
+
+// The hook fires for an address that already exists too, with the id resolved by
+// lookup. That is what lets an idempotent hook repair an application row that was
+// never written — it is the same call, not a separate healing path.
+func TestRegisterHandler_HookFiresWithLookedUpIdForExistingAddress(t *testing.T) {
+	existingID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+
+	var gotID uuid.UUID
+	a := newTestAuthentication(&mockIdentityManager{
+		register: func(ctx context.Context, name, email, password string) (*identityManager.RegisterResponse, error) {
+			return nil, duplicateSignupErr
+		},
+		getUserIdByEmail: func(_ context.Context, email string) (uuid.UUID, error) {
+			if email != "taken@example.com" {
+				return uuid.Nil, identityManager.ErrUserNotFound
+			}
+			return existingID, nil
+		},
+	}, &mockAuthTokenHandler{}, true)
+	a.SetOnRegistered(func(_ context.Context, userID uuid.UUID, _ RegisterRequest) error {
+		gotID = userID
+		return nil
+	})
+
+	rr := postRegister(t, a, registerHookBody)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("a duplicate must stay indistinguishable: got status %d, want %d", rr.Code, http.StatusCreated)
+	}
+	if gotID != existingID {
+		t.Fatalf("hook got id %s, want the existing user %s", gotID, existingID)
+	}
+}
+
+func TestRegisterHandler_FailingHookDeletesTheUserItJustCreated(t *testing.T) {
+	const newUserID = "11111111-1111-1111-1111-111111111111"
+
+	var deleted []uuid.UUID
+	a := newTestAuthentication(&mockIdentityManager{
+		register: func(ctx context.Context, name, email, password string) (*identityManager.RegisterResponse, error) {
+			return &identityManager.RegisterResponse{UserID: newUserID}, nil
+		},
+		deleteUser: func(_ context.Context, userID uuid.UUID) error {
+			deleted = append(deleted, userID)
+			return nil
+		},
+	}, &mockAuthTokenHandler{}, true)
+	a.SetOnRegistered(func(_ context.Context, _ uuid.UUID, _ RegisterRequest) error {
+		return errors.New("database is down")
+	})
+
+	rr := postRegister(t, a, registerHookBody)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, rr.Code)
+	}
+	if len(deleted) != 1 || deleted[0].String() != newUserID {
+		t.Fatalf("expected the new user to be deleted, got %v", deleted)
+	}
+}
+
+// SECURITY: the compensating delete must fire only for a user this request created.
+// In the already-registered branch a failing hook would otherwise turn "register with
+// an address you do not own" into a way to delete somebody else's account.
+func TestRegisterHandler_FailingHookNeverDeletesAPreExistingUser(t *testing.T) {
+	existingID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+
+	var deleted []uuid.UUID
+	a := newTestAuthentication(&mockIdentityManager{
+		register: func(ctx context.Context, name, email, password string) (*identityManager.RegisterResponse, error) {
+			return nil, duplicateSignupErr
+		},
+		getUserIdByEmail: func(_ context.Context, _ string) (uuid.UUID, error) {
+			return existingID, nil
+		},
+		deleteUser: func(_ context.Context, userID uuid.UUID) error {
+			deleted = append(deleted, userID)
+			return nil
+		},
+	}, &mockAuthTokenHandler{}, true)
+	a.SetOnRegistered(func(_ context.Context, _ uuid.UUID, _ RegisterRequest) error {
+		return errors.New("database is down")
+	})
+
+	postRegister(t, a, registerHookBody)
+
+	if len(deleted) != 0 {
+		t.Fatalf("SECURITY: a failing hook deleted a pre-existing account: %v", deleted)
+	}
+}
+
+// A lookup failure leaves nothing to heal, but the response must not say so: a status
+// that differs from a fresh signup tells an anonymous caller the address is taken.
+func TestRegisterHandler_UnresolvableAddressStillAnswersCreated(t *testing.T) {
+	hookFired := false
+	a := newTestAuthentication(&mockIdentityManager{
+		register: func(ctx context.Context, name, email, password string) (*identityManager.RegisterResponse, error) {
+			return nil, duplicateSignupErr
+		},
+		getUserIdByEmail: func(_ context.Context, _ string) (uuid.UUID, error) {
+			return uuid.Nil, errors.New("supabase get user by email: status 500")
+		},
+	}, &mockAuthTokenHandler{}, true)
+	a.SetOnRegistered(func(_ context.Context, _ uuid.UUID, _ RegisterRequest) error {
+		hookFired = true
+		return nil
+	})
+
+	rr := postRegister(t, a, registerHookBody)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, rr.Code)
+	}
+	if hookFired {
+		t.Fatal("the hook must not fire without a resolved user id")
+	}
+}
+
+// Services that install no hook must be untouched by any of this, including the
+// non-UUID user ids a fake identity manager may return.
+func TestRegisterHandler_NoHookLeavesBehaviourUnchanged(t *testing.T) {
+	lookups := 0
+	a := newTestAuthentication(&mockIdentityManager{
+		getUserIdByEmail: func(_ context.Context, _ string) (uuid.UUID, error) {
+			lookups++
+			return uuid.Nil, identityManager.ErrUserNotFound
+		},
+	}, &mockAuthTokenHandler{}, true)
+
+	rr := postRegister(t, a, registerHookBody)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, rr.Code)
+	}
+	if lookups != 0 {
+		t.Fatalf("expected no lookup without a hook, got %d", lookups)
+	}
+}

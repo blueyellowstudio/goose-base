@@ -1,10 +1,12 @@
 package authentication
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/blueyellowstudio/goose-base/authorization"
 	"github.com/blueyellowstudio/goose-base/identityManager"
+	"github.com/google/uuid"
 )
 
 type LoginRedirectConfig struct {
@@ -29,6 +31,28 @@ type Authentication struct {
 	LoginRedirectConfig    LoginRedirectConfig
 	refreshPath            string
 	oauth                  OAuthConfig
+	onRegistered           RegisterHook
+}
+
+// RegisterHook runs after RegisterHandler has a user id for the address, whether that
+// id came from a signup this request performed or from an account that already existed.
+//
+// It MUST be idempotent: an application row that is already present is a no-op success,
+// not an error. That single rule is what makes the already-registered branch repair a
+// row that was never written, instead of needing a separate healing path.
+//
+// Returning an error fails the request with a 500. If this request created the user it
+// is deleted again, so a failed hook cannot leave an identity with no application row
+// behind. If the account already existed it is never touched — deleting there would let
+// a failing hook plus a registration attempt remove somebody else's account.
+type RegisterHook func(ctx context.Context, userID uuid.UUID, req RegisterRequest) error
+
+// SetOnRegistered installs the post-registration hook. Pass nil to remove it.
+//
+// Without a hook RegisterHandler behaves exactly as it did before hooks existed: no
+// user id is parsed and no lookup is performed.
+func (a *Authentication) SetOnRegistered(hook RegisterHook) {
+	a.onRegistered = hook
 }
 
 // NewAuthentication builds the authentication handlers. The authorizer is needed by
