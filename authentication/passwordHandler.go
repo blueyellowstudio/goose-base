@@ -62,7 +62,7 @@ func (a *Authentication) ResetPasswordHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if !isPasswordAcceptable(req.Password) {
+	if !IsPasswordAcceptable(req.Password) {
 		a.respondWithError(w, http.StatusBadRequest, "Weak password")
 		return
 	}
@@ -105,7 +105,7 @@ func (a *Authentication) ChangePasswordHandler(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if !isPasswordAcceptable(req.NewPassword) {
+	if !IsPasswordAcceptable(req.NewPassword) {
 		a.respondWithError(w, http.StatusBadRequest, "Weak password")
 		return
 	}

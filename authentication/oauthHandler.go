@@ -172,7 +172,7 @@ func (a *Authentication) OAuthCallbackHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	a.clearOAuthTempCookies(w)
-	a.setAuthCookie(w, authResponse)
+	a.SetAuthCookie(w, authResponse)
 	http.Redirect(w, r, a.appUrl, http.StatusFound)
 }
 
@@ -220,7 +220,7 @@ func (a *Authentication) oauthCookiePath() string {
 
 // setOAuthTempCookie writes one of the short-lived PKCE cookies.
 //
-// SameSite is deliberately Lax in BOTH environments, unlike setAuthCookie which uses
+// SameSite is deliberately Lax in BOTH environments, unlike SetAuthCookie which uses
 // Strict in production. The callback is a cross-site top-level navigation — the browser
 // arrives at it from the provider's domain — and Strict cookies are not sent on those.
 // A Strict state/verifier cookie would simply be absent at the callback and every login

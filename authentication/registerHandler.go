@@ -36,7 +36,7 @@ func (a *Authentication) RegisterUser(ctx context.Context, username, email, pass
 // It deliberately writes no auth cookie. With Supabase email confirmation enabled
 // signup returns no session — the account is unconfirmed until the user enters the
 // emailed OTP, and GetVerifyTokenHandler(identityManager.EmailOtpTypeSignup) is what
-// calls setAuthCookie once it does.
+// calls SetAuthCookie once it does.
 //
 // Every accepted request gets the same 201 and the same body, including one for an
 // address that is already registered. Anything that distinguishes the two — a 409, a
@@ -143,7 +143,7 @@ func (a *Authentication) GetVerifyTokenHandler(otpType identityManager.EmailOtpT
 		}
 
 		// Set the auth cookie
-		a.setAuthCookie(w, &identityManager.AuthResponse{
+		a.SetAuthCookie(w, &identityManager.AuthResponse{
 			AccessToken:  authResponse.AccessToken,
 			RefreshToken: authResponse.RefreshToken,
 		})
@@ -207,7 +207,7 @@ func isRegisterInputValid(email, password string) bool {
 		return false
 	}
 
-	if !isPasswordAcceptable(password) {
+	if !IsPasswordAcceptable(password) {
 		slog.Warn("Invalid registration input")
 		return false
 	}
@@ -215,9 +215,15 @@ func isRegisterInputValid(email, password string) bool {
 	return true
 }
 
-// isPasswordAcceptable validates the user registration input fields such as Username, Email, and Password.
-// Returns true if the input is valid, otherwise returns false.
-func isPasswordAcceptable(password string) bool {
+// IsPasswordAcceptable reports whether a password meets the minimum rule this package
+// enforces: at least 8 characters, with at least one lowercase letter, one uppercase
+// letter and one digit.
+//
+// Exported so a service's own password-setting handlers — accept-invite, or any flow
+// that sets a password outside ResetPasswordHandler and ChangePasswordHandler — apply
+// the same rule. A second, weaker check elsewhere in a codebase is how one path stays
+// weak long after the others were tightened.
+func IsPasswordAcceptable(password string) bool {
 	if len(password) < 8 {
 		slog.Warn("Invalid registration input password is too short")
 		return false

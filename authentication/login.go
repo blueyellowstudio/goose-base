@@ -76,7 +76,7 @@ func (a *Authentication) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a.setAuthCookie(w, authResponse)
+	a.SetAuthCookie(w, authResponse)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -101,7 +101,7 @@ func (a *Authentication) refreshToken(w http.ResponseWriter, ctx context.Context
 		return nil, err
 	}
 
-	a.setAuthCookie(w, authResp)
+	a.SetAuthCookie(w, authResp)
 	return &authResp.AccessToken, nil
 }
 
@@ -143,7 +143,7 @@ func (a *Authentication) RefreshAuthHandler(w http.ResponseWriter, r *http.Reque
 }
 
 func (a *Authentication) LogoutHandler(w http.ResponseWriter, r *http.Request) {
-	a.clearAuthCookie(w)
+	a.ClearAuthCookie(w)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -173,7 +173,7 @@ func (a *Authentication) DisableAccountHandler(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	a.clearAuthCookie(w)
+	a.ClearAuthCookie(w)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -198,7 +198,7 @@ func (a *Authentication) DeleteAccountHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	a.clearAuthCookie(w)
+	a.ClearAuthCookie(w)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

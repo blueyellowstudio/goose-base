@@ -200,7 +200,7 @@ func TestSetAuthCookie_UsesLaxInDebugMode(t *testing.T) {
 	a := newTestAuthentication(&mockIdentityManager{}, &mockAuthTokenHandler{}, false)
 	rr := httptest.NewRecorder()
 
-	a.setAuthCookie(rr, &identityManager.AuthResponse{AccessToken: "a", RefreshToken: "r"})
+	a.SetAuthCookie(rr, &identityManager.AuthResponse{AccessToken: "a", RefreshToken: "r"})
 
 	res := rr.Result()
 	cookies := res.Cookies()
@@ -675,5 +675,57 @@ func TestSessionHandler_WithoutAuthorizerReportsAnonymous(t *testing.T) {
 	}
 	if got := decodeSessionResponse(t, rr); got.Authenticated {
 		t.Fatal("expected authenticated:false without an authorizer")
+	}
+}
+
+// TestCookieMethods_SetAndClearAgreeOnAttributes guards the reason both methods are
+// exported as a pair: a browser only drops a cookie when the expiring Set-Cookie
+// carries the same name, path and flags as the one that created it. A mismatch leaves
+// a session cookie that logout cannot delete.
+func TestCookieMethods_SetAndClearAgreeOnAttributes(t *testing.T) {
+	for _, isProduction := range []bool{true, false} {
+		t.Run(map[bool]string{true: "production", false: "debug"}[isProduction], func(t *testing.T) {
+			a := newTestAuthentication(&mockIdentityManager{}, &mockAuthTokenHandler{}, isProduction)
+
+			setRecorder := httptest.NewRecorder()
+			a.SetAuthCookie(setRecorder, &identityManager.AuthResponse{AccessToken: "a", RefreshToken: "r"})
+
+			clearRecorder := httptest.NewRecorder()
+			a.ClearAuthCookie(clearRecorder)
+
+			set := setRecorder.Result().Cookies()
+			cleared := clearRecorder.Result().Cookies()
+			if len(set) != 2 || len(cleared) != 2 {
+				t.Fatalf("expected 2 cookies each, got %d set and %d cleared", len(set), len(cleared))
+			}
+
+			for i := range set {
+				s, c := set[i], cleared[i]
+				if s.Name != c.Name || s.Path != c.Path || s.Secure != c.Secure ||
+					s.SameSite != c.SameSite || s.HttpOnly != c.HttpOnly {
+					t.Errorf("attributes differ for %q:\n set:     %+v\n cleared: %+v", s.Name, s, c)
+				}
+				if c.MaxAge >= 0 {
+					t.Errorf("cleared cookie %q needs a negative MaxAge, got %d", c.Name, c.MaxAge)
+				}
+			}
+		})
+	}
+}
+
+func TestIsPasswordAcceptable(t *testing.T) {
+	cases := map[string]bool{
+		"Str0ngEnough":  true,
+		"Sh0rtAA":       false, // 7 characters
+		"alllowercase1": false, // no uppercase
+		"ALLUPPERCASE1": false, // no lowercase
+		"NoDigitsHere":  false, // no digit
+		"":              false,
+	}
+
+	for password, want := range cases {
+		if got := IsPasswordAcceptable(password); got != want {
+			t.Errorf("IsPasswordAcceptable(%q) = %v, want %v", password, got, want)
+		}
 	}
 }

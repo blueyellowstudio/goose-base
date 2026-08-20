@@ -126,7 +126,7 @@ func TestOAuthStartHandler_RedirectsWithPKCEChallenge(t *testing.T) {
 }
 
 // TestOAuthStartHandler_UsesLaxSameSiteInProduction guards the one place this package
-// deliberately diverges from setAuthCookie: Strict cookies are not sent on the
+// deliberately diverges from SetAuthCookie: Strict cookies are not sent on the
 // cross-site top-level navigation back from the provider, so the callback would never
 // see them.
 func TestOAuthStartHandler_UsesLaxSameSiteInProduction(t *testing.T) {
