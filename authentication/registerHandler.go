@@ -66,28 +66,22 @@ func (a *Authentication) RegisterHandler(w http.ResponseWriter, r *http.Request)
 
 	registered, err := a.identities.Register(r.Context(), req.Username, req.Email, req.Password)
 
-	// createdUserID is set only when this request created the account. It is what
-	// decides whether the compensating delete below is allowed to fire.
-	var createdUserID string
-
 	switch {
 	case err == nil:
-		createdUserID = registered.UserID
-		slog.Info("Registered new user", "userID", createdUserID)
+		slog.Info("Registered new user", "userID", registered.UserID)
+		if a.onRegistered != nil {
+			a.runRegisterHook(r, req, registered.UserID)
+		}
 	case isEmailAlreadyRegistered(err):
 		// Not an error for the caller: the address is taken, which is the account
-		// owner's business and nobody else's.
+		// owner's business and nobody else's. No hook and no id lookup either — this
+		// request proved nothing about owning the address, and work done on this
+		// branch only is work a caller can time.
 		slog.Info("Signup for an already registered address", "err", err)
 	default:
 		slog.Error("Registration failed", "status", http.StatusInternalServerError, "path", r.URL.Path, "err", err)
 		a.respondWithError(w, http.StatusInternalServerError, "Registration failed")
 		return
-	}
-
-	if a.onRegistered != nil {
-		if !a.runRegisterHook(w, r, req, createdUserID) {
-			return
-		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -98,57 +92,25 @@ func (a *Authentication) RegisterHandler(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// runRegisterHook resolves the user id for the address and calls the registration hook.
-// It reports whether RegisterHandler should carry on to its success response; when it
-// returns false it has already written the error response.
+// runRegisterHook calls the registration hook for the account Register just returned.
 //
-// createdUserID is non-empty only when this request created the account. For an address
-// that already existed the id is recovered by lookup instead, which is what lets an
-// idempotent hook repair an application row that was never written.
-func (a *Authentication) runRegisterHook(w http.ResponseWriter, r *http.Request, req RegisterRequest, createdUserID string) bool {
-	var userID uuid.UUID
-	createdHere := createdUserID != ""
-
-	if createdHere {
-		parsed, err := uuid.Parse(createdUserID)
-		if err != nil {
-			slog.Error("Registration failed", "status", http.StatusInternalServerError,
-				"path", r.URL.Path, "userID", createdUserID, "err", err)
-			a.respondWithError(w, http.StatusInternalServerError, "Registration failed")
-			return false
-		}
-		userID = parsed
-	} else {
-		existing, err := a.identities.GetUserIdByEmail(r.Context(), req.Email)
-		if err != nil {
-			// Nothing to heal without an id. The response stays a 201 anyway: a
-			// different one here would tell an anonymous caller the address is taken.
-			slog.Error("Signup for an already registered address, id lookup failed",
-				"path", r.URL.Path, "err", err)
-			return true
-		}
-		userID = existing
+// The outcome never reaches the response. A hook that failed only for new addresses
+// would otherwise answer 500 where a taken address answers 201. A failed hook deletes
+// nothing either: Register returning an id does not prove this request created the
+// account, so a delete could remove one it did not create. The missing application row
+// is the service's to repair on login, see RegisterHook.
+func (a *Authentication) runRegisterHook(r *http.Request, req RegisterRequest, registeredUserID string) {
+	userID, err := uuid.Parse(registeredUserID)
+	if err != nil {
+		slog.Error("Post-registration hook skipped: user id is not a UUID",
+			"path", r.URL.Path, "userID", registeredUserID, "err", err)
+		return
 	}
 
 	if err := a.onRegistered(r.Context(), userID, req); err != nil {
-		slog.Error("Post-registration hook failed", "status", http.StatusInternalServerError,
-			"path", r.URL.Path, "userID", userID, "createdHere", createdHere, "err", err)
-
-		// Compensate only for a user this request created. Deleting in the
-		// already-registered branch would let a failing hook plus a registration
-		// attempt remove somebody else's account.
-		if createdHere {
-			if deleteErr := a.identities.DeleteUser(r.Context(), userID); deleteErr != nil {
-				slog.Error("Compensating delete failed, identity is orphaned",
-					"userID", userID, "email", req.Email, "err", deleteErr)
-			}
-		}
-
-		a.respondWithError(w, http.StatusInternalServerError, "Registration failed")
-		return false
+		slog.Error("Post-registration hook failed, application row is missing until the user logs in",
+			"path", r.URL.Path, "userID", userID, "err", err)
 	}
-
-	return true
 }
 
 // alreadyRegisteredMarkers are the error texts identityManager.Register produces for

@@ -22,7 +22,7 @@ The `IdentityManager` interface covers:
 - **SendInvite** — invite a user by email (admin-initiated)
 - **CreateManagedUser** — create a user on behalf of an admin, skipping email confirmation
 - **GetUserEmail** — look up a user's email by UUID
-- **GetUserIdByEmail** — the reverse lookup, or `ErrUserNotFound`. Signup returns no id for an address that already exists, so this is how a caller recovers one (see [the register hook](#post-registration-hook))
+- **GetUserIdByEmail** — the reverse lookup, or `ErrUserNotFound`. Admin use only: never call it from an anonymous request path, where the extra lookup is a timing signal for which addresses exist
 - **UpdateUserPassword** — set a new password for a given user UUID
 - **DisableUser** — ban the user for ~100 years
 - **DeleteUser** — permanently remove the user from the identity provider
@@ -180,24 +180,27 @@ It holds a reference to an `IdentityManager` (for auth operations), a `TokenHand
 type RegisterHook func(ctx context.Context, userID uuid.UUID, req RegisterRequest) error
 
 authn.SetOnRegistered(func(ctx context.Context, userID uuid.UUID, req authentication.RegisterRequest) error {
-    // MUST be idempotent — see below.
+    // Insert if absent, never update — see below.
     return users.EnsureRow(ctx, userID, req.Username, req.FirstName, req.LastName)
 })
 ```
 
-**The hook must be idempotent.** It fires in *both* branches: for an account this request created, and for an address that already existed, whose id is recovered with `GetUserIdByEmail`. That is deliberate — it makes self-healing the same code path rather than a second one. An idempotent hook writes the row the first time and repairs a missing one on any later signup attempt, which matters because the branch that would otherwise strand a user has no id to work with.
+**The hook runs only when the signup returned a user id.** For an address Supabase reports as already registered it is not called and no id is looked up. That request is anonymous and proves nothing about owning the address, so writing for the account behind it would let anyone write into somebody else's account.
 
-**A failing hook fails the request with a 500**, in both branches. Where they differ is cleanup:
+**The hook's result never reaches the caller.** Every accepted signup answers the same 201 and body, whether the hook succeeded, failed, or did not run:
 
 | | hook succeeds | hook fails |
 |---|---|---|
-| account created by this request | 201 | 500, **and the new user is deleted again** |
-| address already existed | 201 | 500, the account is left alone |
-| address already existed, lookup failed | 201, hook not called | — |
+| signup returned an id | 201 | 201, error logged, **no user is deleted** |
+| address already registered | 201, hook not called | — |
 
-> **The compensating delete must never fire for an account this request did not create.** Otherwise a failing hook plus a signup for an address you do not own becomes a way to delete somebody else's account. `RegisterHandler` tracks this explicitly rather than inferring it.
+A 500 that only a new address can produce would tell an anonymous caller which addresses are taken. And no delete, because a returned id does not prove this request created the account.
 
-Without a hook installed, `RegisterHandler` behaves exactly as it did before hooks existed — no id is parsed and no lookup is issued.
+> **The hook must insert if absent and never overwrite.** `req` is anonymous input, and Supabase may return the existing id for an address that signed up earlier but never confirmed.
+
+**Repair a missing row on login.** A failed hook leaves an identity without its application row. Ensure the row in a [login hook](#post-login-hook), where the user id comes from a verified token.
+
+Without a hook installed, `RegisterHandler` behaves exactly as it did before hooks existed — no id is parsed.
 
 ### Post-login hook
 

@@ -35,23 +35,24 @@ type Authentication struct {
 	onLogin                LoginHook
 }
 
-// RegisterHook runs after RegisterHandler has a user id for the address, whether that
-// id came from a signup this request performed or from an account that already existed.
+// RegisterHook runs after RegisterHandler's signup returned a user id. It never runs for
+// an address Supabase reports as already registered: that request proved nothing about
+// owning the address, so it must not write data for the account behind it.
 //
-// It MUST be idempotent: an application row that is already present is a no-op success,
-// not an error. That single rule is what makes the already-registered branch repair a
-// row that was never written, instead of needing a separate healing path.
+// Its error is logged and changes nothing the caller sees — no 500, no deleted user. A
+// status that depended on the hook would tell an anonymous caller which addresses are
+// new. A failed hook therefore leaves an identity without its application row; repair
+// that in a login hook (SetOnLogin), where the user id comes from a verified token.
 //
-// Returning an error fails the request with a 500. If this request created the user it
-// is deleted again, so a failed hook cannot leave an identity with no application row
-// behind. If the account already existed it is never touched — deleting there would let
-// a failing hook plus a registration attempt remove somebody else's account.
+// It MUST be idempotent and MUST NOT overwrite a row that is already present: req is
+// anonymous input, and Supabase may return the existing id for an address that signed
+// up earlier but never confirmed.
 type RegisterHook func(ctx context.Context, userID uuid.UUID, req RegisterRequest) error
 
 // SetOnRegistered installs the post-registration hook. Pass nil to remove it.
 //
 // Without a hook RegisterHandler behaves exactly as it did before hooks existed: no
-// user id is parsed and no lookup is performed.
+// user id is parsed.
 func (a *Authentication) SetOnRegistered(hook RegisterHook) {
 	a.onRegistered = hook
 }
