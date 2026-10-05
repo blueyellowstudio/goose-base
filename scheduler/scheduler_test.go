@@ -66,6 +66,53 @@ func TestSchedulerSkipsOverlappingRuns(t *testing.T) {
 	}
 }
 
+// A panicking run must not leave the overlap guard locked, or every later tick is skipped.
+func TestSchedulerRunsJobAgainAfterPanic(t *testing.T) {
+	s := New(discardLogger())
+	var runs atomic.Int32
+	secondRun := make(chan struct{}, 1)
+
+	err := s.Register("panicking-job", "@every 1s", func(context.Context) error {
+		if runs.Add(1) == 1 {
+			panic("first run fails")
+		}
+		notify(secondRun)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("register panicking job: %v", err)
+	}
+
+	s.Start()
+	defer stopScheduler(t, s)
+
+	select {
+	case <-secondRun:
+	case <-time.After(signalTimeout):
+		t.Fatalf("expected job to run again after a panic, got %d runs", runs.Load())
+	}
+}
+
+// signalTimeout bounds every wait on a job signal; generous so slow CI does not flake.
+const signalTimeout = 10 * time.Second
+
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// notify signals ch without blocking when a signal is already pending.
+func notify(ch chan<- struct{}) {
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+func stopScheduler(t *testing.T, s *Scheduler) {
+	t.Helper()
+	stopCtx, cancel := context.WithTimeout(context.Background(), signalTimeout)
+	defer cancel()
+	if err := s.Stop(stopCtx); err != nil {
+		t.Errorf("stop scheduler: %v", err)
+	}
 }

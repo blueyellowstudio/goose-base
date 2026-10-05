@@ -18,7 +18,8 @@ type Scheduler struct {
 	jobTimeout time.Duration
 }
 
-// New creates a scheduler with panic recovery and skip-if-running overlap handling.
+// New creates a scheduler that skips a run while the previous one is still active
+// and recovers job panics inside that guard, so a panic never blocks later runs.
 func New(logger *slog.Logger) *Scheduler {
 	if logger == nil {
 		logger = slog.Default()
@@ -28,9 +29,11 @@ func New(logger *slog.Logger) *Scheduler {
 	return &Scheduler{
 		cron: cron.New(
 			cron.WithLogger(cronLogger),
+			// Order matters: SkipIfStillRunning releases its guard without defer,
+			// so Recover must sit inside it or one panic skips the job forever.
 			cron.WithChain(
-				cron.Recover(cronLogger),
 				cron.SkipIfStillRunning(cronLogger),
+				cron.Recover(cronLogger),
 			),
 		),
 		logger:     logger,
