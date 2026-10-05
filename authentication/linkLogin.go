@@ -44,7 +44,7 @@ func (a *Authentication) AuthLinkHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	a.SetAuthCookie(w, tokenResp)
+	a.startSession(w, r, tokenResp)
 	http.Redirect(w, r, redirectURL, http.StatusFound)
 }
 

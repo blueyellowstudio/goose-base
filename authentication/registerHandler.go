@@ -209,7 +209,7 @@ func (a *Authentication) GetVerifyTokenHandler(otpType identityManager.EmailOtpT
 		}
 
 		// Set the auth cookie
-		a.SetAuthCookie(w, &identityManager.AuthResponse{
+		a.startSession(w, r, &identityManager.AuthResponse{
 			AccessToken:  authResponse.AccessToken,
 			RefreshToken: authResponse.RefreshToken,
 		})

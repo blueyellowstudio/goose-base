@@ -172,7 +172,7 @@ func (a *Authentication) OAuthCallbackHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	a.clearOAuthTempCookies(w)
-	a.SetAuthCookie(w, authResponse)
+	a.startSession(w, r, authResponse)
 	http.Redirect(w, r, a.appUrl, http.StatusFound)
 }
 

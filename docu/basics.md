@@ -199,6 +199,29 @@ authn.SetOnRegistered(func(ctx context.Context, userID uuid.UUID, req authentica
 
 Without a hook installed, `RegisterHandler` behaves exactly as it did before hooks existed — no id is parsed and no lookup is issued.
 
+### Post-login hook
+
+`SetOnLogin` lets a service add its own state to a fresh session — a cookie, a header —
+without owning the login handlers:
+
+```go
+type LoginHook func(w http.ResponseWriter, r *http.Request, userID uuid.UUID)
+
+authn.SetOnLogin(func(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
+    http.SetCookie(w, &http.Cookie{Name: "current_company", Value: companyFor(r.Context(), userID)})
+})
+```
+
+It runs after `LoginHandler`, `GetVerifyTokenHandler`, `AuthLinkHandler` and
+`OAuthCallbackHandler` have written the session cookies, before the response is sent.
+`userID` is the `sub` of the new access token.
+
+- **A refresh is not a login.** `RefreshAuthHandler` never runs the hook.
+- **The hook cannot fail the login.** The session already exists; log your own errors.
+  A token without a usable `sub` skips the hook and is logged.
+
+Without a hook installed, every login behaves exactly as before hooks existed.
+
 ### Handlers a service can build on
 
 Three helpers are exported for services that keep a handler of their own, typically because it also writes application tables — an accept-invite or delete-account flow:

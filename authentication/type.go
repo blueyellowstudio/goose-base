@@ -32,6 +32,7 @@ type Authentication struct {
 	refreshPath            string
 	oauth                  OAuthConfig
 	onRegistered           RegisterHook
+	onLogin                LoginHook
 }
 
 // RegisterHook runs after RegisterHandler has a user id for the address, whether that

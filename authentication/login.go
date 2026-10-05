@@ -76,7 +76,7 @@ func (a *Authentication) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a.SetAuthCookie(w, authResponse)
+	a.startSession(w, r, authResponse)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
