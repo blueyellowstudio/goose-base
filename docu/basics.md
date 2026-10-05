@@ -36,6 +36,10 @@ The `SupabaseIdentityManager` implementation uses two key types:
 - **Anon key** for public-facing operations (login, register, token refresh, OTP verification, password reset, OAuth code exchange)
 - **Service role key** for privileged admin operations (create, invite, disable, delete, get email)
 
+### Errors
+
+An error answer of the provider comes back as `*ProviderError`, carrying its HTTP status. `IsUnavailable(err)` tells an outage — provider unreachable, 5xx, 429 — from a refused request. Use it wherever a refused token ends a session: an outage must not log the user out.
+
 ### OTP types
 
 `VerifyEmailOtp` takes an `EmailOtpType`. Picking the wrong one fails at runtime with an opaque "invalid or expired OTP", so the distinction matters:

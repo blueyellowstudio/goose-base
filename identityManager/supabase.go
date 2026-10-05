@@ -84,16 +84,18 @@ func (s *SupabaseIdentityManager) do(req *http.Request) ([]byte, int, error) {
 	return body, resp.StatusCode, nil
 }
 
-// parseAdminError extracts a human-readable error from a Supabase admin error response body.
+// parseAdminError turns a Supabase admin error answer into a *ProviderError with a
+// human-readable message.
 func parseAdminError(body []byte, status int, context string) error {
 	var errResp AdminErrorResponse
 	if json.Unmarshal(body, &errResp) == nil && errResp.Message != "" {
-		return fmt.Errorf("%s: %s", context, errResp.Message)
+		return &ProviderError{Operation: context, StatusCode: status, Message: errResp.Message}
 	}
-	return fmt.Errorf("%s: status %d: %s", context, status, string(body))
+	return rawProviderError(body, status, context)
 }
 
-// parseAnonError extracts a human-readable error from a Supabase anon error response body.
+// parseAnonError turns a Supabase anon error answer into a *ProviderError with a
+// human-readable message.
 func parseAnonError(body []byte, status int, context string) error {
 	var errResp struct {
 		Error            string `json:"error"`
@@ -102,13 +104,18 @@ func parseAnonError(body []byte, status int, context string) error {
 	}
 	if json.Unmarshal(body, &errResp) == nil {
 		if errResp.ErrorDescription != "" {
-			return fmt.Errorf("%s: %s", context, errResp.ErrorDescription)
+			return &ProviderError{Operation: context, StatusCode: status, Message: errResp.ErrorDescription}
 		}
 		if errResp.Message != "" {
-			return fmt.Errorf("%s: %s", context, errResp.Message)
+			return &ProviderError{Operation: context, StatusCode: status, Message: errResp.Message}
 		}
 	}
-	return fmt.Errorf("%s: status %d: %s", context, status, string(body))
+	return rawProviderError(body, status, context)
+}
+
+// rawProviderError keeps the whole body of an answer without a known error shape.
+func rawProviderError(body []byte, status int, context string) error {
+	return &ProviderError{Operation: context, StatusCode: status, Message: fmt.Sprintf("status %d: %s", status, string(body))}
 }
 
 func (s *SupabaseIdentityManager) Register(ctx context.Context, name, email, password string) (*RegisterResponse, error) {
