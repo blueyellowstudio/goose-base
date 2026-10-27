@@ -44,6 +44,14 @@ Env helpers: `GetEnv`, `GetEnvBool`, `GetEnvInt` — all accept a default value.
 ### `ping`
 Single handler `ping.Handler` — returns `"Pong"`. Mount with chi: `r.Get("/ping", ping.Handler)`.
 
+### `session`
+Provider-neutral server-side sessions: the browser holds only an opaque cookie, the tokens stay on the server. `Session` and `Tokens` are plain value types; `Refresher` is implemented by the caller's identity provider adapter; `Store` persists sessions.
+- `MemoryStore` is the in-process `Store`; the caller starts `go store.Run(ctx, interval)` to sweep expired sessions.
+- `Manager.Create` sets the cookie, `Manager.Destroy` deletes the session and clears the cookie, `session.FromContext` reads the session from a request context.
+- The cookie value is 32 random bytes (base64url); the store key is its hex SHA-256, so the store never sees the cookie value. The cookie is always `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`. Set and clear build it from one function: a browser only drops a cookie whose name, path, `Secure` and `SameSite` match.
+- `Config.Now` and `MemoryStoreConfig.Now` inject the clock for tests.
+- The HTTP middleware follows in a later change.
+
 ## Key conventions
 
 - All methods accept `context.Context` as first argument
