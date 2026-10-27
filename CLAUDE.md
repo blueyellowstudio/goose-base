@@ -50,7 +50,10 @@ Provider-neutral server-side sessions: the browser holds only an opaque cookie, 
 - `Manager.Create` sets the cookie, `Manager.Destroy` deletes the session and clears the cookie, `session.FromContext` reads the session from a request context.
 - The cookie value is 32 random bytes (base64url); the store key is its hex SHA-256, so the store never sees the cookie value. The cookie is always `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`. Set and clear build it from one function: a browser only drops a cookie whose name, path, `Secure` and `SameSite` match.
 - `Config.Now` and `MemoryStoreConfig.Now` inject the clock for tests.
-- The HTTP middleware follows in a later change.
+- `m.Middleware` resolves the session for every request and puts it into the request context. Mount it before the routes that need a session and after CORS, so that a 503 reaches the browser.
+- It never rejects a request for lacking a session; the application's own auth middleware answers 401. Its only own answer is a 503 when a refresh failed and the access token is already expired. It writes a cookie only after a refresh (new `Max-Age`) or a rejected refresh (clear).
+- A session whose access token is inside the refresh window (`RefreshAhead`, capped at half the token lifetime) is refreshed once under singleflight on a context detached from the request and bounded by `Config.RefreshTimeout` (default 15 s). `Destroy` waits for a running refresh.
+- When the provider returns no refresh token (no rotation), the stored refresh token and its expiry are kept.
 
 ## Key conventions
 

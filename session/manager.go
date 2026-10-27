@@ -12,29 +12,37 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 const (
 	DefaultCookieName   = "session"
 	DefaultRefreshAhead = 30 * time.Second
+	// DefaultRefreshTimeout bounds one refresh, which runs detached from the request that started it.
+	DefaultRefreshTimeout = 15 * time.Second
 )
 
 // NewManager applies the Config defaults. refresher may be nil while nothing refreshes tokens.
 func NewManager(store Store, refresher Refresher, cfg Config) *Manager {
 	m := &Manager{
-		store:        store,
-		refresher:    refresher,
-		cookieName:   cfg.CookieName,
-		refreshAhead: cfg.RefreshAhead,
-		logger:       cfg.Logger,
-		now:          cfg.Now,
-		locks:        make(map[string]*keyLock),
+		store:          store,
+		refresher:      refresher,
+		cookieName:     cfg.CookieName,
+		refreshAhead:   cfg.RefreshAhead,
+		refreshTimeout: cfg.RefreshTimeout,
+		logger:         cfg.Logger,
+		now:            cfg.Now,
+		locks:          make(map[string]*keyLock),
 	}
 	if m.cookieName == "" {
 		m.cookieName = DefaultCookieName
 	}
 	if m.refreshAhead == 0 {
 		m.refreshAhead = DefaultRefreshAhead
+	}
+	if m.refreshTimeout == 0 {
+		m.refreshTimeout = DefaultRefreshTimeout
 	}
 	if m.logger == nil {
 		m.logger = slog.Default()
@@ -145,22 +153,25 @@ func storeKey(cookieValue string) string {
 
 // Config configures NewManager.
 type Config struct {
-	CookieName   string           // "" = DefaultCookieName
-	RefreshAhead time.Duration    // 0 = DefaultRefreshAhead
-	Logger       *slog.Logger     // nil = slog.Default()
-	Now          func() time.Time // nil = time.Now
+	CookieName     string           // "" = DefaultCookieName
+	RefreshAhead   time.Duration    // 0 = DefaultRefreshAhead
+	RefreshTimeout time.Duration    // 0 = DefaultRefreshTimeout
+	Logger         *slog.Logger     // nil = slog.Default()
+	Now            func() time.Time // nil = time.Now
 }
 
 // Manager creates and destroys sessions and sets their cookie.
 type Manager struct {
-	store        Store
-	refresher    Refresher
-	cookieName   string
-	refreshAhead time.Duration
-	logger       *slog.Logger
-	now          func() time.Time
-	locksMu      sync.Mutex
-	locks        map[string]*keyLock
+	store          Store
+	refresher      Refresher
+	cookieName     string
+	refreshAhead   time.Duration
+	refreshTimeout time.Duration
+	logger         *slog.Logger
+	now            func() time.Time
+	locksMu        sync.Mutex
+	locks          map[string]*keyLock
+	group          singleflight.Group
 }
 
 type keyLock struct {

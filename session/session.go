@@ -15,6 +15,10 @@ var (
 	ErrRefreshRejected = errors.New("session: refresh rejected")
 	// ErrRefreshExpired means the refresh token has already expired, so no session can be created.
 	ErrRefreshExpired = errors.New("session: refresh token already expired")
+
+	// errNoRefresher is a transient failure: NewManager accepts a nil Refresher, so a session
+	// that needs a refresh must not crash the request.
+	errNoRefresher = errors.New("session: no refresher configured")
 )
 
 // Refresher exchanges a refresh token for a new token set at the identity provider.
