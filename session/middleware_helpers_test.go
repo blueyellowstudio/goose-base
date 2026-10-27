@@ -20,7 +20,7 @@ var (
 	sessionMwExpired      = sessionTestT0.Add(5 * time.Minute)
 )
 
-var sessionMwErrTransient = errors.New("provider unavailable")
+var errSessionMwTransient = errors.New("provider unavailable")
 
 const sessionMwWaitBound = 2 * time.Second
 
@@ -132,15 +132,6 @@ func sessionMwRequireSignal(t *testing.T, ch <-chan struct{}, what string) {
 	}
 }
 
-func sessionMwRequireNoSignal(t *testing.T, ch <-chan struct{}, what string) {
-	t.Helper()
-	select {
-	case <-ch:
-		t.Fatalf("%s happened while it should still be blocked", what)
-	case <-time.After(100 * time.Millisecond):
-	}
-}
-
 // sessionMwGo runs fn in a goroutine and returns a channel that is closed when fn returns.
 func sessionMwGo(fn func()) <-chan struct{} {
 	done := make(chan struct{})
@@ -232,7 +223,7 @@ type sessionMwRefresher struct {
 	issued   int
 	noRotate bool          // success returns RefreshToken "" and zero RefreshExpiresAt; valid unchanged
 	failNext error         // returned once, before any rotation
-	lostNext bool          // once: rotate internally, then return sessionMwErrTransient
+	lostNext bool          // once: rotate internally, then return errSessionMwTransient
 	block    chan struct{} // when non-nil: wait for close(block) or ctx.Done()
 	entered  chan struct{} // when non-nil: a non-blocking send on every call, before blocking
 	calls    int
@@ -276,7 +267,7 @@ func (f *sessionMwRefresher) Refresh(ctx context.Context, refreshToken string) (
 	if f.lostNext {
 		f.lostNext = false
 		f.valid = sessionMwToken("refresh", n)
-		return Tokens{}, sessionMwErrTransient
+		return Tokens{}, errSessionMwTransient
 	}
 	if f.noRotate {
 		return Tokens{

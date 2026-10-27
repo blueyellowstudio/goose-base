@@ -288,7 +288,7 @@ func TestMiddlewareLostRefreshResponse(t *testing.T) {
 func TestMiddlewareTransientRefreshError(t *testing.T) {
 	t.Run("access still valid", func(t *testing.T) {
 		env := sessionMwSetup(t, nil, sessionTestTokens(sessionTestT0.Add(30*time.Minute)))
-		env.refresher.failNext = sessionMwErrTransient
+		env.refresher.failNext = errSessionMwTransient
 		env.clock.Set(sessionMwInsideWindow)
 		seen := &sessionMwSeen{}
 
@@ -304,7 +304,7 @@ func TestMiddlewareTransientRefreshError(t *testing.T) {
 
 	t.Run("access expired", func(t *testing.T) {
 		env := sessionMwSetup(t, nil, sessionTestTokens(sessionTestT0.Add(30*time.Minute)))
-		env.refresher.failNext = sessionMwErrTransient
+		env.refresher.failNext = errSessionMwTransient
 		env.clock.Set(sessionMwExpired)
 		seen := &sessionMwSeen{}
 
