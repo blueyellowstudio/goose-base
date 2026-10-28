@@ -168,7 +168,7 @@ func (s *Storage) DeleteObject(bucket, objectKey string) error {
 func (s *Storage) DeleteObjects(bucket string, objectKeys []string) error {
 	for start := 0; start < len(objectKeys); start += int(s.listPageSize) {
 		end := min(start+int(s.listPageSize), len(objectKeys))
-		if err := s.deleteBatch(bucket, objectKeys[start:end]); err != nil {
+		if err := s.deleteBatch(context.Background(), bucket, objectKeys[start:end]); err != nil {
 			return err
 		}
 	}
@@ -219,12 +219,12 @@ func (s *Storage) presignGet(ctx context.Context, input *s3.GetObjectInput, file
 	return &storage.DownloadInfo{URL: signed.URL, Filename: filename, ExpiresAt: expiresAt}, nil
 }
 
-func (s *Storage) deleteBatch(bucket string, keys []string) error {
+func (s *Storage) deleteBatch(ctx context.Context, bucket string, keys []string) error {
 	identifiers := make([]types.ObjectIdentifier, len(keys))
 	for i := range keys {
 		identifiers[i] = types.ObjectIdentifier{Key: &keys[i]}
 	}
-	out, err := s.client.DeleteObjects(context.Background(), &s3.DeleteObjectsInput{
+	out, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
 		Bucket: &bucket,
 		Delete: &types.Delete{Objects: identifiers, Quiet: aws.Bool(true)},
 	})

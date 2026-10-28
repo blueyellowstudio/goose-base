@@ -45,7 +45,7 @@ Request and response checksums are only used when required (`WhenRequired`); Sup
 
 ### Deleting
 
-`DeleteObject`, `DeleteObjects` and `DeleteObjectContext` treat a missing key (`NoSuchKey`) as success. A missing bucket stays an error.
+`DeleteObject`, `DeleteObjects` and `DeleteObjectContext` treat a missing key (`NoSuchKey`) as success. Only `NoSuchKey` counts as missing, so a missing bucket stays an error on deletes. `HeadObject`, `GetObjectInfo` and `FileExists` see only the HTTP status of a HEAD (no body), so any 404 there, a missing bucket included, reads as `ErrObjectNotFound`.
 
 ## Tests
 
