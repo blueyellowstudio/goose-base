@@ -36,7 +36,7 @@ Transactional outbox pattern over PostgreSQL (pgx). Flow:
 `DomainEvent` interface is defined locally in `outbox.go`. Consuming services implement it on their domain event types. Requires DB schema from `outbox/setup.sql`.
 
 ### `storage`
-File storage abstraction. `storageInterface.go` defines the `Storage` interface and config structs. Two implementations: `FileStorage` (local filesystem with HMAC-signed URLs) and `SupabaseStorage` (Supabase Storage API).
+File storage abstraction. `storageInterface.go` defines the `Storage` interface, `SignedStorage` (signed upload content type, download response headers, `HeadObject`, context delete) and config structs. Three implementations: `FileStorage` (local filesystem with HMAC-signed URLs), `SupabaseStorage` (Supabase Storage API) and `s3storage.Storage` (S3-compatible, sub-package `storage/s3storage`; only its importers build the AWS SDK). The S3 endpoint must be the one host clients call, since presigned URLs sign it. See `docu/storage.md`.
 
 ### `utils`
 Env helpers: `GetEnv`, `GetEnvBool`, `GetEnvInt` — all accept a default value.
