@@ -179,6 +179,16 @@ func (s *Service) MoveFolder(ctx context.Context, folderID uuid.UUID, newParentI
 
 // CreateFile creates a new file record and calls the FileAdded callback.
 func (s *Service) CreateFile(ctx context.Context, file domain.File) (*domain.File, error) {
+	return s.CreateFileWith(ctx, file, nil)
+}
+
+// CreateFileWith creates a file like CreateFile and runs afterCreate in the same transaction,
+// so the file is kept only when afterCreate succeeds. afterCreate may be nil.
+func (s *Service) CreateFileWith(
+	ctx context.Context,
+	file domain.File,
+	afterCreate func(ctx context.Context, tx txpkg.Transaction, created domain.File) error,
+) (*domain.File, error) {
 	var result *domain.File
 	err := s.runInTx(ctx, "create file", func(ctx context.Context, tx txpkg.Transaction) error {
 		var createErr error
@@ -189,6 +199,13 @@ func (s *Service) CreateFile(ctx context.Context, file domain.File) (*domain.Fil
 
 		if err := s.dbCbs.FileAdded(ctx, tx, *result); err != nil {
 			return fmt.Errorf("create file: callback: %w", err)
+		}
+
+		if afterCreate == nil {
+			return nil
+		}
+		if err := afterCreate(ctx, tx, *result); err != nil {
+			return fmt.Errorf("create file: after create: %w", err)
 		}
 
 		return nil
