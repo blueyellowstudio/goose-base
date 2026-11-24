@@ -13,7 +13,7 @@ type Folder struct {
 	Name      string     `json:"name"`
 	NameRef   *uuid.UUID `json:"nameRef,omitempty"`
 	CreatedAt time.Time  `json:"createdAt"`
-	CreatedBy uuid.UUID  `json:"createdBy"`
+	CreatedBy *uuid.UUID `json:"createdBy"` // nil once the creator's account is deleted
 	DeletedAt *time.Time `json:"deletedAt,omitempty"`
 	Metadata  []byte     `json:"metadata"`
 }

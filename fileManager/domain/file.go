@@ -11,7 +11,7 @@ type File struct {
 	FolderID  *uuid.UUID `json:"folderId"`
 	Name      string     `json:"name"`
 	NameRef   *uuid.UUID `json:"nameRef,omitempty"`
-	UserID    uuid.UUID  `json:"userId"`
+	UserID    *uuid.UUID `json:"userId"` // nil once the owner's account is deleted
 	Category  int        `json:"category"`
 	FileType  *string    `json:"fileType,omitempty"`
 	CreatedAt time.Time  `json:"createdAt"`

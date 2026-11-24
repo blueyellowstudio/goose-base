@@ -30,7 +30,7 @@ func (h *Handler) createFolder(w http.ResponseWriter, r *http.Request) {
 	folder := domain.Folder{
 		ParentID:  req.ParentID,
 		Name:      req.Name,
-		CreatedBy: userID,
+		CreatedBy: &userID,
 		Metadata:  []byte("{}"),
 	}
 

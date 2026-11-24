@@ -15,7 +15,7 @@ CREATE TABLE folders
     name       TEXT        NOT NULL,
     name_ref   UUID REFERENCES translations (id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    created_by UUID        NOT NULL REFERENCES "user" (id),
+    created_by UUID        REFERENCES "user" (id) ON DELETE SET NULL,
     deleted_at TIMESTAMPTZ,
     metadata   JSONB       NOT NULL DEFAULT '{}'
 );
@@ -28,7 +28,7 @@ CREATE TABLE files
     folder_id  UUID        NOT NULL REFERENCES folders (id),
     name       TEXT        NOT NULL,
     name_ref   UUID REFERENCES translations (id),
-    user_id    UUID        NOT NULL REFERENCES "user" (id),
+    user_id    UUID        REFERENCES "user" (id) ON DELETE SET NULL,
     file_type  TEXT,
     category   INT,
     mime_type  TEXT,
